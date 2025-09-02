@@ -1,0 +1,16 @@
+# Vivado/Vitis
+*.jou
+*.log
+*.cache/
+*.Xil/
+*.ip_user_files/
+*.hw/
+*.runs/
+*.sim/
+*.gen/
+*.str
+# Vitis workspaces/builds
+.metadata/
+*.sdk/
+workspace*/
+build*/
