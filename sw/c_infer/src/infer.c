@@ -3,7 +3,7 @@
 #include <string.h>
 #include <float.h>
 #include <math.h>
-#include "../export/weights.h" 
+#include "../include/weights.h" 
 
 static inline float relu(float x) {return x > 0.f ? x : 0.f; }
 
