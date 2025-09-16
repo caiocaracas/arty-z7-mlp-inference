@@ -1,27 +1,30 @@
-// weights.h - gerado por train.py 
-// Formato row-major: W1(n_in x n_hid), b1(n_hid), W2(n_hid x n_out), b2(n_out)
-
 #pragma once
 #include <stdint.h>
+
+#if defined(__GNUC__)
+  #define MLP_ALIGN __attribute__((aligned(16)))
+#else
+  #define MLP_ALIGN
+#endif
 
 static const int MLP_N_IN  = 16;
 static const int MLP_N_HID = 32;
 static const int MLP_N_OUT = 5;
 
 static const int MLP_FEAT_MEAN_LEN = 16;
-static const float MLP_FEAT_MEAN[] = {
+static const float MLP_ALIGN MLP_FEAT_MEAN[] = {
   -4.37999219e-02f, -2.46447548e-02f, -3.86244982e-01f, -4.36949551e-01f, -9.46230814e-03f, -5.94772818e-03f, 3.56892586e-01f, 2.30816603e-01f,
   5.95585227e-01f, 1.99033275e-01f, -3.87880832e-01f, -8.40855688e-02f, 3.20878439e-02f, -5.96559107e-01f, 2.29540486e-02f, 2.01024547e-01f,
 };
 
 static const int MLP_FEAT_SCALE_LEN = 16;
-static const float MLP_FEAT_SCALE[] = {
+static const float MLP_ALIGN MLP_FEAT_SCALE[] = {
   2.17570591e+00f, 2.36652017e+00f, 2.26283026e+00f, 2.09966826e+00f, 1.00091398e+00f, 1.00876403e+00f, 2.36152840e+00f, 2.23816037e+00f,
   2.13097692e+00f, 2.26012778e+00f, 2.20768833e+00f, 2.20604396e+00f, 1.01456654e+00f, 2.26358032e+00f, 1.00754142e+00f, 2.23347735e+00f,
 };
 
 static const int MLP_W1_LEN = 512;
-static const float MLP_W1[] = {
+static const float MLP_ALIGN MLP_W1[] = {
   -3.73174734e-02f, 6.33994460e-01f, -1.70768350e-01f, 4.55805242e-01f, -1.17478864e-02f, -1.72005206e-01f, -8.60709175e-02f, 2.91565925e-01f,
   -2.90783554e-01f, -1.86045378e-01f, -6.74952745e-01f, 5.32736242e-01f, 2.96487242e-01f, -2.49049813e-01f, -7.21034929e-02f, -6.48287058e-01f,
   -7.04525113e-01f, 4.50266063e-01f, -4.96315002e-01f, 5.40876165e-02f, 1.08510084e-01f, -3.51325810e-01f, 5.11942923e-01f, -1.93052113e-01f,
@@ -89,7 +92,7 @@ static const float MLP_W1[] = {
 };
 
 static const int MLP_B1_LEN = 32;
-static const float MLP_B1[] = {
+static const float MLP_ALIGN MLP_B1[] = {
   3.69871825e-01f, 5.92276752e-01f, -6.42158747e-01f, 6.22798428e-02f, -7.79935047e-02f, 4.47795652e-02f, 2.25464657e-01f, 2.42433682e-01f,
   1.47046149e-01f, -3.62636924e-01f, 2.67300069e-01f, 2.87355334e-01f, 3.31677347e-02f, 3.58948894e-02f, 2.60608137e-01f, 1.94131926e-01f,
   3.69190015e-02f, 2.88238198e-01f, 1.67760536e-01f, 5.16514838e-01f, 8.49307030e-02f, 2.14492053e-01f, 3.35706323e-01f, 2.75683701e-01f,
@@ -97,7 +100,7 @@ static const float MLP_B1[] = {
 };
 
 static const int MLP_W2_LEN = 160;
-static const float MLP_W2[] = {
+static const float MLP_ALIGN MLP_W2[] = {
   8.23007300e-02f, -1.58449277e-01f, -5.97109854e-01f, 3.94959092e-01f, -3.50802690e-02f, 4.95276153e-01f, -4.14815545e-01f, 5.59339345e-01f,
   -2.33496025e-01f, 1.44445300e-01f, 7.34217942e-01f, 2.55066812e-01f, -7.98808113e-02f, -1.13858855e+00f, 1.63037717e-01f, 2.32827231e-01f,
   6.59157753e-01f, -4.00413066e-01f, -1.11383128e+00f, -4.54176575e-01f, -8.78702462e-01f, -3.03713232e-01f, -2.81185240e-01f, 2.31709138e-01f,
@@ -121,7 +124,7 @@ static const float MLP_W2[] = {
 };
 
 static const int MLP_B2_LEN = 5;
-static const float MLP_B2[] = {
+static const float MLP_ALIGN MLP_B2[] = {
   -1.32710546e-01f, 1.29510775e-01f, -1.21630989e-01f, 2.89386719e-01f, -8.61974955e-02f,
 };
 
