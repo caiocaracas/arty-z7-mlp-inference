@@ -14,3 +14,4 @@
 *.sdk/
 workspace*/
 build*/
+sw/c_infer/src/infer
