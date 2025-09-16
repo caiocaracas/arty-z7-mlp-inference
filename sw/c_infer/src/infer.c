@@ -20,3 +20,8 @@ static void matmul_vec(const float *x, const float *W, int d, int m, float *y) {
     y[j] = acc;
   }
 }
+static int argmax(const float *v, int n) {
+  int idx = 0; float best = v[0];
+  for (int i = 1; i < n; ++i) if (v[i] > best) { best = v[i]; idx = i; }
+  return idx;
+}
