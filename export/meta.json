@@ -1,9 +1,12 @@
 {
   "solver": "adam",
   "acc_test": 0.78375,
+  "elapsed_s": 0.8488938119999148,
+  "parity_sklearn_forward": 1.0,
   "n_in": 16,
   "n_hid": 32,
   "n_out": 5,
+  "n_params": 709,
   "feature_mean": [
     -0.04379992187023163,
     -0.024644754827022552,
