@@ -89,3 +89,29 @@ static int load_x_raw_from_json(const char *path, float *x, int n, int *pred_jso
   free(buf);
   return 0;
 }
+int main(int argc, char **argv) {
+  const char *json_path = (argc > 1) ? argv[1] : "export/test_vector.json";
+  float x_raw[MLP_N_IN];
+  int pred_json = -1;
+  int rc = load_x_raw_from_json(json_path, x_raw, MLP_N_IN, &pred_json);
+  if (rc != 0) {
+    fprintf(stderr, "Erro ao ler %s (rc=%d)\n", json_path, rc);
+    return 1;
+  }
+
+  float z2[MLP_N_OUT];
+  mlp_forward_logits(x_raw, z2);
+  int pred_c = argmax(z2, MLP_N_OUT);
+
+  printf("Pred(JSON esperado) = %d\n", pred_json);
+  printf("Pred(C calculado)   = %d\n", pred_c);
+  printf("Logits:");
+  for (int k = 0; k < MLP_N_OUT; ++k) printf(" %d:%.6f", k, z2[k]);
+  printf("\n");
+
+  if (pred_json >= 0 && pred_c != pred_json) {
+    fprintf(stderr, "DIVERGENCIA: C=%d, JSON=%d\n", pred_c, pred_json);
+    return 2;
+  }
+ return 0;
+}
