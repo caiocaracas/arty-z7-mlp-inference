@@ -14,7 +14,7 @@ from sklearn.metrics import accuracy_score
 class Config:
   # saídas
   outdir: Path = Path("export")
-  # arquiteturas e regularização
+  # arquitetura e regularização
   hidden_units: int = 32
   alpha_l2: float = 1e-4
   # treino
@@ -35,12 +35,14 @@ class Config:
   test_size: float = 0.2
 
 CFG = Config()
-np.random.seed(CFG.random_state) # reprodutibilidade do numPy
+np.random.seed(CFG.random_state)  # reprodutibilidade do numpy
 
 def ensure_outdir(p: Path) -> None:
+  """garante que a pasta de saída exista."""
   p.mkdir(parents=True, exist_ok=True)
 
 def write_c_array(f, name: str, arr: np.ndarray) -> None:
+  """escreve um array float32 row-major como C array alinhado (8 valores/linha)."""
   flat = np.asarray(arr, dtype=np.float32, order="C").ravel()
   f.write(f"static const int {name}_LEN = {flat.size};\n")
   f.write(f"static const float MLP_ALIGN {name}[] = {{\n")
@@ -55,6 +57,7 @@ def export_header_and_meta(outdir: Path, scaler: StandardScaler,
                            solver_name: str, acc_test: float,
                            elapsed_s: float, parity: float,
                            extra_metrics: dict | None = None) -> None:
+  """gera weights.h (para C) e meta.json."""
   n_in, n_hid = W1.shape
   _, n_out  = W2.shape
   header = outdir / "weights.h"
@@ -86,56 +89,58 @@ def export_header_and_meta(outdir: Path, scaler: StandardScaler,
   }
   if extra_metrics:
     meta.update(extra_metrics)
-    (outdir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+  # (bugfix) escrever SEMPRE o meta.json
+  (outdir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
 def relu_inplace(v: np.ndarray) -> None:
+  """ReLU in-place para evitar alocações extras."""
   np.maximum(v, 0.0, out=v)
 
 def forward_logits_xraw(x_raw: np.ndarray,
                       scaler_mean: np.ndarray, scaler_scale: np.ndarray,
                       W1: np.ndarray, b1: np.ndarray,
                       W2: np.ndarray, b2: np.ndarray) -> np.ndarray:
+  """forward manual em 1 amostra (sem softmax)."""
   x = (x_raw.astype(np.float32) - scaler_mean.astype(np.float32)) / (scaler_scale.astype(np.float32) + 1e-12)
   z1 = x @ W1 + b1
   relu_inplace(z1)
   z2 = z1 @ W2 + b2
   return z2
 
-def margin_stats_from_logits(z2: np.ndarray) -> tuple[float, float]:
-    """
-    z2: (N, n_out) logits. Retorna (p10, p50) da margem (max − segundo_maior).
-    usa np.partition para evitar sort completo por linha.
-    """
-    # duas maiores entradas por linha (não ordenadas)
-    top2 = np.partition(z2, kth=-2, axis=1)[:, -2:]
-    # ordena os dois maiores e computa margem por amostra
-    top2_sorted = np.sort(top2, axis=1)
-    margins = top2_sorted[:, 1] - top2_sorted[:, 0]
-    p10 = float(np.percentile(margins, 10))
-    p50 = float(np.percentile(margins, 50))
-    return p10, p50
-
-def save_test_vector(outdir: Path, Xte_raw: np.ndarray, scaler: StandardScaler,
-                    W1: np.ndarray, b1: np.ndarray, W2: np.ndarray, b2: np.ndarray) -> None:
-  x0_raw = np.asarray(Xte_raw[0], dtype=np.float32)
-  logits = forward_logits_xraw(x0_raw, scaler.mean_, scaler.scale_, W1, b1, W2, b2)
-  pred = int(np.argmax(logits))
-  payload = {"x_raw": x0_raw.tolist(), "pred_argmax_logits": pred}
-  (outdir / "test_vector.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
 def logits_batch_from_raw(Xraw: np.ndarray,
                         scaler_mean: np.ndarray, scaler_scale: np.ndarray,
                         W1: np.ndarray, b1: np.ndarray,
                         W2: np.ndarray, b2: np.ndarray) -> np.ndarray:
   """
-  Xraw: (N, d) não normalizado -> retorna logits (N, n_out).
-  Vetorizado e em float32 para ser consistente com o C.
+  Xraw: (N, d) não normalizado -> logits (N, n_out).
+  vetorizado e em float32 para ser consistente com o C.
   """
   Xs = (Xraw.astype(np.float32) - scaler_mean.astype(np.float32)) / (scaler_scale.astype(np.float32) + 1e-12)
   z1 = Xs @ W1 + b1
   np.maximum(z1, 0.0, out=z1)
   z2 = z1 @ W2 + b2
   return z2
+
+def margin_stats_from_logits(z2: np.ndarray) -> tuple[float, float]:
+  """
+  z2: (N, n_out) logits. Retorna (p10, p50) da margem (max - segundo_maior).
+  Usa np.partition (O(n)) ao invés de sort completo (O(n log n)).
+  """
+  top2 = np.partition(z2, kth=-2, axis=1)[:, -2:]  # duas maiores entradas por linha
+  top2_sorted = np.sort(top2, axis=1)
+  margins = top2_sorted[:, 1] - top2_sorted[:, 0]
+  p10 = float(np.percentile(margins, 10))
+  p50 = float(np.percentile(margins, 50))
+  return p10, p50
+
+def save_test_vector(outdir: Path, Xte_raw: np.ndarray, scaler: StandardScaler,
+                    W1: np.ndarray, b1: np.ndarray, W2: np.ndarray, b2: np.ndarray) -> None:
+  """salva 1 amostra bruta e o rótulo previsto via argmax(logits) para validar no C."""
+  x0_raw = np.asarray(Xte_raw[0], dtype=np.float32)
+  logits = forward_logits_xraw(x0_raw, scaler.mean_, scaler.scale_, W1, b1, W2, b2)
+  pred = int(np.argmax(logits))
+  payload = {"x_raw": x0_raw.tolist(), "pred_argmax_logits": pred}
+  (outdir / "test_vector.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 def main() -> None:
   t0 = time.perf_counter()
@@ -146,11 +151,12 @@ def main() -> None:
                               n_classes=CFG.n_classes, random_state=CFG.random_state)
   Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=CFG.test_size,
                                         stratify=y, random_state=CFG.random_state)
-  # normalização (obrigatória p/ MLP; replicada no C)
+  # normalização (replicada no C)
   scaler = StandardScaler().fit(Xtr)
   Xtr_s = scaler.transform(Xtr)
   Xte_s = scaler.transform(Xte)
-  # MLP (1 camada oculta, ReLU, Adam). Early stopping com validação explícita.
+
+  # MLP (1 camada oculta, ReLU, Adam)
   clf = MLPClassifier(hidden_layer_sizes=(CFG.hidden_units,), activation="relu",
                       alpha=CFG.alpha_l2, solver="adam",
                       learning_rate_init=CFG.lr_adam, beta_1=CFG.beta1, beta_2=CFG.beta2,
@@ -159,14 +165,17 @@ def main() -> None:
                       n_iter_no_change=CFG.n_iter_no_change, random_state=CFG.random_state,
                       shuffle=True, verbose=False)
   clf.fit(Xtr_s, ytr)
+
   # acurácia de teste (referência do modelo no scikit)
   y_pred = clf.predict(Xte_s)
   acc = accuracy_score(yte, y_pred)
 
+  # pesos/biases (contíguos, float32, row-major)
   W1 = np.ascontiguousarray(clf.coefs_[0].astype(np.float32, copy=False))
   b1 = clf.intercepts_[0].astype(np.float32, copy=False)
   W2 = np.ascontiguousarray(clf.coefs_[1].astype(np.float32, copy=False))
   b2 = clf.intercepts_[1].astype(np.float32, copy=False)
+
   # paridade sklearn vs forward manual (sanity check)
   Xchk = Xte[:256].astype(np.float32)
   z1 = (Xchk - scaler.mean_) / (scaler.scale_ + 1e-12)
@@ -175,12 +184,25 @@ def main() -> None:
   z2 = z1 @ W2 + b2
   y_pred_man = z2.argmax(axis=1)
   parity = float((y_pred_man == clf.predict((Xchk - scaler.mean_) / (scaler.scale_ + 1e-12))).mean())
+
+  # margem de decisão no conjunto de teste inteiro
+  z2_test = logits_batch_from_raw(Xte.astype(np.float32), scaler.mean_, scaler.scale_, W1, b1, W2, b2)
+  margin_p10, margin_p50 = margin_stats_from_logits(z2_test)
+
   dt = time.perf_counter() - t0
 
+  # exporta artefatos + métricas extras (margens)
   export_header_and_meta(CFG.outdir, scaler, W1, b1, W2, b2,
-                          solver_name="adam", acc_test=acc,
-                          elapsed_s=dt, parity=parity)
+                        solver_name="adam", acc_test=acc,
+                        elapsed_s=dt, parity=parity,
+                        extra_metrics={
+                            "margin_p10": margin_p10,
+                            "margin_p50": margin_p50
+                        })
   save_test_vector(CFG.outdir, Xte, scaler, W1, b1, W2, b2)
+
+  print(f"[OK] Solver=adam  acc_test={acc:.4f}  parity={parity:.4f}  "
+    f"margin_p10={margin_p10:.4f}  margin_p50={margin_p50:.4f}  elapsed={dt:.2f}s")
 
 if __name__ == "__main__":
     main()
