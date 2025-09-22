@@ -50,10 +50,11 @@ def write_c_array(f, name: str, arr: np.ndarray) -> None:
   f.write("};\n\n")
 
 def export_header_and_meta(outdir: Path, scaler: StandardScaler,
-                          W1: np.ndarray, b1: np.ndarray,
-                          W2: np.ndarray, b2: np.ndarray,
-                          solver_name: str, acc_test: float,
-                          elapsed_s: float, parity: float) -> None:
+                           W1: np.ndarray, b1: np.ndarray,
+                           W2: np.ndarray, b2: np.ndarray,
+                           solver_name: str, acc_test: float,
+                           elapsed_s: float, parity: float,
+                           extra_metrics: dict | None = None) -> None:
   n_in, n_hid = W1.shape
   _, n_out  = W2.shape
   header = outdir / "weights.h"
@@ -83,7 +84,9 @@ def export_header_and_meta(outdir: Path, scaler: StandardScaler,
     "feature_mean": np.asarray(scaler.mean_,  dtype=np.float32).tolist(),
     "feature_scale": np.asarray(scaler.scale_, dtype=np.float32).tolist()
   }
-  (outdir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+  if extra_metrics:
+    meta.update(extra_metrics)
+    (outdir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
 def relu_inplace(v: np.ndarray) -> None:
   np.maximum(v, 0.0, out=v)
