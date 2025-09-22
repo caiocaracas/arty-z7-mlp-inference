@@ -12,17 +12,22 @@ from sklearn.metrics import accuracy_score
 
 @dataclass(frozen=True)
 class Config:
+  # saídas
   outdir: Path = Path("export")
+  # arquiteturas e regularização
   hidden_units: int = 32
   alpha_l2: float = 1e-4
+  # treino
   max_iter: int = 300
   early_stopping: bool = True
   validation_fraction: float = 0.10
   n_iter_no_change: int = 12
   random_state: int = 42
+  # adam
   lr_adam: float = 1e-3
   beta1: float = 0.9
   beta2: float = 0.999
+  # dados
   n_samples: int = 4000
   n_features: int = 16
   n_informative: int = 12
@@ -30,7 +35,7 @@ class Config:
   test_size: float = 0.2
 
 CFG = Config()
-np.random.seed(CFG.random_state)
+np.random.seed(CFG.random_state) # reprodutibilidade do numPy
 
 def ensure_outdir(p: Path) -> None:
   p.mkdir(parents=True, exist_ok=True)
@@ -58,8 +63,10 @@ def export_header_and_meta(outdir: Path, scaler: StandardScaler,
     f.write(f"static const int MLP_N_IN  = {n_in};\n")
     f.write(f"static const int MLP_N_HID = {n_hid};\n")
     f.write(f"static const int MLP_N_OUT = {n_out};\n\n")
+    # scaler para normalização idêntica no C
     write_c_array(f, "MLP_FEAT_MEAN", np.asarray(scaler.mean_,  dtype=np.float32))
     write_c_array(f, "MLP_FEAT_SCALE", np.asarray(scaler.scale_, dtype=np.float32))
+    # pesos e vieses (row-major)
     write_c_array(f, "MLP_W1", W1)
     write_c_array(f, "MLP_B1", b1)
     write_c_array(f, "MLP_W2", W2)
@@ -108,11 +115,11 @@ def main() -> None:
                               n_classes=CFG.n_classes, random_state=CFG.random_state)
   Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=CFG.test_size,
                                         stratify=y, random_state=CFG.random_state)
-
+  # normalização (obrigatória p/ MLP; replicada no C)
   scaler = StandardScaler().fit(Xtr)
   Xtr_s = scaler.transform(Xtr)
   Xte_s = scaler.transform(Xte)
-
+  # MLP (1 camada oculta, ReLU, Adam). Early stopping com validação explícita.
   clf = MLPClassifier(hidden_layer_sizes=(CFG.hidden_units,), activation="relu",
                       alpha=CFG.alpha_l2, solver="adam",
                       learning_rate_init=CFG.lr_adam, beta_1=CFG.beta1, beta_2=CFG.beta2,
@@ -121,7 +128,7 @@ def main() -> None:
                       n_iter_no_change=CFG.n_iter_no_change, random_state=CFG.random_state,
                       shuffle=True, verbose=False)
   clf.fit(Xtr_s, ytr)
-
+  # acurácia de teste (referência do modelo no scikit)
   y_pred = clf.predict(Xte_s)
   acc = accuracy_score(yte, y_pred)
 
@@ -129,7 +136,7 @@ def main() -> None:
   b1 = clf.intercepts_[0].astype(np.float32, copy=False)
   W2 = np.ascontiguousarray(clf.coefs_[1].astype(np.float32, copy=False))
   b2 = clf.intercepts_[1].astype(np.float32, copy=False)
-
+  # paridade sklearn vs forward manual (sanity check)
   Xchk = Xte[:256].astype(np.float32)
   z1 = (Xchk - scaler.mean_) / (scaler.scale_ + 1e-12)
   z1 = z1 @ W1 + b1
