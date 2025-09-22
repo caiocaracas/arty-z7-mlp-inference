@@ -50,7 +50,8 @@ ADERÊNCIA À MEETING 1
 Base mínima local (Python→C), sem softmax; solver comparável (Adam ativo; SGD guardado para experimento posterior); arquivos exportados viabilizam portar para a PS/PL; métricas registradas.
 
 PRÓXIMOS PASSOS
-1. Replicações e blocagem: gerar um lote (p.ex. 32 vetores) em test_batch.json e valide em C todos de uma vez (aumenta a confiança). Avaliar acc_test.
-2. Fator “solver” (2 níveis: Adam vs SGD+mom): rodar ambos mantendo arquitetura/hiperparâmetros, comaprar acc_test, elapsed_s; registrar em meta.json e em relatório.
-3. Fator “dataset”: trocar para MNIST mantendo o mesmo script (caso aprovado em meeting 2); verificar se acc_test sobe para ~90%+.
-4. Planejar quantização (novo fator depois): float32 → Q15, medindo impacto na paridade e acc_test.
+1. Novas métricas (mínimas e úteis): Paridade em lote (Python↔C): alvo 100%; Tempo de inferência (C) por amostra: média e p95 (ex.: em lotes de 1, 32, 256); Margem de decisão: margin = z_max − z_2º (robustez sem softmax) → p10 e p50; Já registrar MACs por inferência (= n_in*n_hid + n_hid*n_out → aqui 672 MACs) e model_bytes (4×n_params). 
+2. Replicações e blocagem: gerar um lote (p.ex. 32 vetores) em test_batch.json e valide em C todos de uma vez (aumenta a confiança). Avaliar acc_test.
+3. Fator “solver” (2 níveis: Adam vs SGD+mom): rodar ambos mantendo arquitetura/hiperparâmetros, comaprar acc_test, elapsed_s; registrar em meta.json e em relatório.
+4. Fator “dataset”: trocar para MNIST mantendo o mesmo script (caso aprovado em meeting 2); verificar se acc_test sobe para ~90%+.
+5. Planejar quantização (novo fator depois): float32 → Q15, medindo impacto na paridade e acc_test.
