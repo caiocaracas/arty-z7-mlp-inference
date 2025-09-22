@@ -98,6 +98,20 @@ def forward_logits_xraw(x_raw: np.ndarray,
   z2 = z1 @ W2 + b2
   return z2
 
+def margin_stats_from_logits(z2: np.ndarray) -> tuple[float, float]:
+    """
+    z2: (N, n_out) logits. Retorna (p10, p50) da margem (max − segundo_maior).
+    usa np.partition para evitar sort completo por linha.
+    """
+    # duas maiores entradas por linha (não ordenadas)
+    top2 = np.partition(z2, kth=-2, axis=1)[:, -2:]
+    # ordena os dois maiores e computa margem por amostra
+    top2_sorted = np.sort(top2, axis=1)
+    margins = top2_sorted[:, 1] - top2_sorted[:, 0]
+    p10 = float(np.percentile(margins, 10))
+    p50 = float(np.percentile(margins, 50))
+    return p10, p50
+
 def save_test_vector(outdir: Path, Xte_raw: np.ndarray, scaler: StandardScaler,
                     W1: np.ndarray, b1: np.ndarray, W2: np.ndarray, b2: np.ndarray) -> None:
   x0_raw = np.asarray(Xte_raw[0], dtype=np.float32)
