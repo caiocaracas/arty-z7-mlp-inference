@@ -106,6 +106,20 @@ def save_test_vector(outdir: Path, Xte_raw: np.ndarray, scaler: StandardScaler,
   payload = {"x_raw": x0_raw.tolist(), "pred_argmax_logits": pred}
   (outdir / "test_vector.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
+def logits_batch_from_raw(Xraw: np.ndarray,
+                        scaler_mean: np.ndarray, scaler_scale: np.ndarray,
+                        W1: np.ndarray, b1: np.ndarray,
+                        W2: np.ndarray, b2: np.ndarray) -> np.ndarray:
+  """
+  Xraw: (N, d) não normalizado -> retorna logits (N, n_out).
+  Vetorizado e em float32 para ser consistente com o C.
+  """
+  Xs = (Xraw.astype(np.float32) - scaler_mean.astype(np.float32)) / (scaler_scale.astype(np.float32) + 1e-12)
+  z1 = Xs @ W1 + b1
+  np.maximum(z1, 0.0, out=z1)
+  z2 = z1 @ W2 + b2
+  return z2
+
 def main() -> None:
   t0 = time.perf_counter()
   ensure_outdir(CFG.outdir)
