@@ -1,10 +1,13 @@
 {
   "n": 128,
   "parity_batch_pct": 100.000000,
-  "infer_mean_us": 0.079139,
-  "infer_p95_us": 0.088600,
+  "infer_mean_us": 0.077174,
+  "infer_p95_us": 0.080457,
   "margin_p10": 0.358002,
   "margin_p50": 1.827277,
   "repeat": 5000,
-  "timestamp": 1758599136
+  "elapsed_ms": 49.391620,
+  "macs_per_infer": 672,
+  "ns_per_mac": 0.114843,
+  "timestamp": 1758600112
 }
