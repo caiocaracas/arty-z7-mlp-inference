@@ -1,4 +1,3 @@
-# ml/src/train.py
 from __future__ import annotations
 import json, time
 from dataclasses import dataclass
@@ -14,6 +13,8 @@ from sklearn.metrics import accuracy_score
 class Config:
   # saídas
   outdir: Path = Path("export")
+  # identificação do dataset
+  dataset: str = "synthetic"
   # arquiteturas e regularização
   hidden_units: int = 32
   alpha_l2: float = 1e-4
@@ -33,9 +34,11 @@ class Config:
   n_informative: int = 12
   n_classes: int = 5
   test_size: float = 0.2
+  # export em lote
+  batch_size: int = 128
 
 CFG = Config()
-np.random.seed(CFG.random_state)
+np.random.seed(CFG.random_state) # reprodutibilidade do numPy
 
 def ensure_outdir(p: Path) -> None:
   p.mkdir(parents=True, exist_ok=True)
@@ -64,7 +67,7 @@ def export_header_and_meta(outdir: Path, scaler: StandardScaler,
     f.write(f"static const int MLP_N_IN  = {n_in};\n")
     f.write(f"static const int MLP_N_HID = {n_hid};\n")
     f.write(f"static const int MLP_N_OUT = {n_out};\n\n")
-    # scaler p/ normalização idêntica no C
+    # scaler para normalização idêntica no C
     write_c_array(f, "MLP_FEAT_MEAN", np.asarray(scaler.mean_,  dtype=np.float32))
     write_c_array(f, "MLP_FEAT_SCALE", np.asarray(scaler.scale_, dtype=np.float32))
     # pesos e vieses (row-major)
@@ -73,9 +76,7 @@ def export_header_and_meta(outdir: Path, scaler: StandardScaler,
     write_c_array(f, "MLP_W2", W2)
     write_c_array(f, "MLP_B2", b2)
 
-  n_params = int(W1.size + b1.size + W2.size + b2.size) 
-  macs_per_infer = int(n_in * n_hid + n_hid * n_out) # 16*32 + 32*5 = 672 no run atual
-  model_bytes = int(4 * n_params) # float32 = 4 bytes
+  n_params = int(W1.size + b1.size + W2.size + b2.size)
   meta = {
     "solver": solver_name,
     "acc_test": float(acc_test),
@@ -83,12 +84,9 @@ def export_header_and_meta(outdir: Path, scaler: StandardScaler,
     "parity_sklearn_forward": float(parity),
     "n_in": int(n_in), "n_hid": int(n_hid), "n_out": int(n_out),
     "n_params": n_params,
-    "macs_per_infer": macs_per_infer,
-    "model_bytes": model_bytes,
     "feature_mean": np.asarray(scaler.mean_,  dtype=np.float32).tolist(),
     "feature_scale": np.asarray(scaler.scale_, dtype=np.float32).tolist()
   }
-
   if extra_metrics:
     meta.update(extra_metrics)
   (outdir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
@@ -107,10 +105,6 @@ def forward_logits_xraw(x_raw: np.ndarray,
   return z2
 
 def margin_stats_from_logits(z2: np.ndarray) -> tuple[float, float]:
-  """
-  z2: (N, n_out) logits. Retorna (p10, p50) da margem (max − segundo_maior).
-  usa np.partition para evitar sort completo por linha.
-  """
   top2 = np.partition(z2, kth=-2, axis=1)[:, -2:]
   top2_sorted = np.sort(top2, axis=1)
   margins = top2_sorted[:, 1] - top2_sorted[:, 0]
@@ -127,18 +121,32 @@ def save_test_vector(outdir: Path, Xte_raw: np.ndarray, scaler: StandardScaler,
   (outdir / "test_vector.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 def logits_batch_from_raw(Xraw: np.ndarray,
-                          scaler_mean: np.ndarray, scaler_scale: np.ndarray,
-                          W1: np.ndarray, b1: np.ndarray,
-                          W2: np.ndarray, b2: np.ndarray) -> np.ndarray:
-  """
-  Xraw: (N, d) não normalizado -> retorna logits (N, n_out).
-  vetorizado e em float32 para ser consistente com o C.
-  """
+                        scaler_mean: np.ndarray, scaler_scale: np.ndarray,
+                        W1: np.ndarray, b1: np.ndarray,
+                        W2: np.ndarray, b2: np.ndarray) -> np.ndarray:
   Xs = (Xraw.astype(np.float32) - scaler_mean.astype(np.float32)) / (scaler_scale.astype(np.float32) + 1e-12)
   z1 = Xs @ W1 + b1
   np.maximum(z1, 0.0, out=z1)
   z2 = z1 @ W2 + b2
   return z2
+
+def save_test_batch(outdir: Path, Xte_raw: np.ndarray, scaler: StandardScaler,
+                    W1: np.ndarray, b1: np.ndarray, W2: np.ndarray, b2: np.ndarray,
+                    batch_size: int) -> None:
+  """
+  Exporta batch de amostras para validação Py↔C: x_raw, pred (argmax), margin (zmax - z2nd).
+  """
+  N = min(batch_size, Xte_raw.shape[0])
+  Xsel = np.asarray(Xte_raw[:N], dtype=np.float32)
+  z2 = logits_batch_from_raw(Xsel, scaler.mean_, scaler.scale_, W1, b1, W2, b2)
+  pred = np.argmax(z2, axis=1).astype(np.int32)
+  top2 = np.partition(z2, kth=-2, axis=1)[:, -2:]
+  top2.sort(axis=1)
+  margins = (top2[:, 1] - top2[:, 0]).astype(np.float32)
+  batch = [{"x_raw": Xsel[i].tolist(), "pred": int(pred[i]), "margin": float(margins[i])}
+           for i in range(N)]
+  (outdir / "test_batch.json").write_text(json.dumps(batch, indent=2), encoding="utf-8")
+  print(f"[OK] Exportado batch para validação Py↔C: {outdir}/test_batch.json (N={N})")
 
 def main() -> None:
   t0 = time.perf_counter()
@@ -149,7 +157,6 @@ def main() -> None:
                               n_classes=CFG.n_classes, random_state=CFG.random_state)
   Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=CFG.test_size,
                                         stratify=y, random_state=CFG.random_state)
-
   scaler = StandardScaler().fit(Xtr)
   Xtr_s = scaler.transform(Xtr)
   Xte_s = scaler.transform(Xte)
@@ -179,25 +186,14 @@ def main() -> None:
   y_pred_man = z2.argmax(axis=1)
   parity = float((y_pred_man == clf.predict((Xchk - scaler.mean_) / (scaler.scale_ + 1e-12))).mean())
 
-  # margens no conjunto de teste inteiro
-  z2_test = logits_batch_from_raw(Xte.astype(np.float32), scaler.mean_, scaler.scale_, W1, b1, W2, b2)
-  margin_p10, margin_p50 = margin_stats_from_logits(z2_test)
-
   dt = time.perf_counter() - t0
 
-  n_in, n_hid = W1.shape
-  macs_per_infer = int(n_in * n_hid + n_hid * b2.size)
-  model_bytes = int(4 * (W1.size + b1.size + W2.size + b2.size))
-
   export_header_and_meta(CFG.outdir, scaler, W1, b1, W2, b2,
-                        solver_name="adam", acc_test=acc,
-                        elapsed_s=dt, parity=parity,
-                        extra_metrics={"margin_p10": margin_p10, "margin_p50": margin_p50})
+                          solver_name="adam", acc_test=acc,
+                          elapsed_s=dt, parity=parity)
   save_test_vector(CFG.outdir, Xte, scaler, W1, b1, W2, b2)
-
-  print(f"[OK] Solver=adam  acc_test={acc:.4f}  parity={parity:.4f}  "
-        f"margin_p10={margin_p10:.4f}  margin_p50={margin_p50:.4f}  "
-        f"MACs/inf={macs_per_infer}  model_bytes={model_bytes}  elapsed={dt:.2f}s")
+  if CFG.batch_size > 0:
+    save_test_batch(CFG.outdir, Xte, scaler, W1, b1, W2, b2, CFG.batch_size)
 
 if __name__ == "__main__":
   main()
