@@ -4,12 +4,6 @@
 // Inferência MLP (float32 + ReLU) e métricas estáveis sobre lote.
 // Lê export/test_batch.json (ou test_vector.json) e grava export/results_batch.json.
 //
-// Compilação típica:
-//   cc -O3 -std=c11 -Wall -Wextra -o infer infer.c
-//
-// Uso:
-//   ./infer                # busca export/test_batch.json por padrão
-//   ./infer caminho.json   # pode apontar para test_vector.json
 //------------------------------------------------------------------------------
 
 #include <math.h>
@@ -129,7 +123,28 @@ static double PercentileSorted(const double* x_sorted, int n, double p) {
 }
 
 //==============================================================================
-// JSON helpers (parsing leve, suficiente para o formato)
+// Helpers de tamanho de memória (float32)
+//==============================================================================
+
+static inline long long BytesWeightsModel(void) {
+  // 2 camadas densas + biases
+  long long w1 = (long long)MLP_N_IN * (long long)MLP_N_HID;
+  long long w2 = (long long)MLP_N_HID * (long long)MLP_N_OUT;
+  long long b1 = (long long)MLP_N_HID;
+  long long b2 = (long long)MLP_N_OUT;
+  long long params = w1 + w2 + b1 + b2;
+  return params * 4LL;  // float32
+}
+
+static inline long long BytesWorkspace(void) {
+  long long bx = (long long)MLP_N_IN * 4LL;
+  long long bh = (long long)MLP_N_HID * 4LL;
+  long long bo = (long long)MLP_N_OUT * 4LL;
+  return bx + bh + bo;
+}
+
+//==============================================================================
+// JSON helpers (parsing leve, suficiente para nosso formato)
 //==============================================================================
 
 static int FirstNonWs(FILE* fp) {
@@ -143,36 +158,20 @@ static int FirstNonWs(FILE* fp) {
 static char* SlurpFile(const char* path, size_t* len_out) {
   FILE* f = fopen(path, "rb");
   if (!f) return NULL;
-  if (fseek(f, 0, SEEK_END) != 0) {
-    fclose(f);
-    return NULL;
-  }
+  if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
   long L = ftell(f);
-  if (L < 0) {
-    fclose(f);
-    return NULL;
-  }
-  if (fseek(f, 0, SEEK_SET) != 0) {
-    fclose(f);
-    return NULL;
-  }
+  if (L < 0) { fclose(f); return NULL; }
+  if (fseek(f, 0, SEEK_SET) != 0) { fclose(f); return NULL; }
   char* buf = (char*)malloc((size_t)L + 1u);
-  if (!buf) {
-    fclose(f);
-    return NULL;
-  }
-  if (fread(buf, 1u, (size_t)L, f) != (size_t)L) {
-    fclose(f);
-    free(buf);
-    return NULL;
-  }
+  if (!buf) { fclose(f); return NULL; }
+  if (fread(buf, 1u, (size_t)L, f) != (size_t)L) { fclose(f); free(buf); return NULL; }
   buf[L] = '\0';
   fclose(f);
   if (len_out) *len_out = (size_t)L;
   return buf;
 }
 
-// Extrai "x_raw":[...], "pred_py":int (opcional), "label":int.
+// Extrai "x_raw":[...], "pred_py":int (opcional), "label":int (opcional).
 static int ParseItemFields(const char* js, float* x_out, int dx,
                            int* pred_py_opt, int* label_opt) {
   const char* px = strstr(js, "\"x_raw\"");
@@ -187,33 +186,40 @@ static int ParseItemFields(const char* js, float* x_out, int dx,
     while (p < qe && isspace((unsigned char)*p)) ++p;
     x_out[i++] = strtof(p, (char**)&p);
     const char* c = strchr(p, ',');
-    if (c && c < qe) {
-      p = c + 1;
-    } else {
-      break;
-    }
+    if (c && c < qe) { p = c + 1; } else { break; }
   }
   if (i != dx) return -2;
 
   if (pred_py_opt) {
     const char* pp = strstr(js, "\"pred_py\"");
-    if (pp) {
-      pp = strchr(pp, ':');
-      if (pp) *pred_py_opt = (int)strtol(pp + 1, NULL, 10);
-    } else {
-      *pred_py_opt = -1;
-    }
+    if (pp) { pp = strchr(pp, ':'); if (pp) *pred_py_opt = (int)strtol(pp + 1, NULL, 10); }
+    else { *pred_py_opt = -1; }
   }
   if (label_opt) {
     const char* pl = strstr(js, "\"label\"");
-    if (pl) {
-      pl = strchr(pl, ':');
-      if (pl) *label_opt = (int)strtol(pl + 1, NULL, 10);
-    } else {
-      *label_opt = -1;
-    }
+    if (pl) { pl = strchr(pl, ':'); if (pl) *label_opt = (int)strtol(pl + 1, NULL, 10); }
+    else { *label_opt = -1; }
   }
   return 0;
+}
+
+//==============================================================================
+// Crescimento seguro de buffers
+//==============================================================================
+
+static int EnsureCapacity(float **margins, double **t_us, int *capacity) {
+  int new_cap = (*capacity) * 2;
+  float  *m2 = (float *)realloc(*margins, sizeof(float)  * (size_t)new_cap);
+  double *t2 = (double*)realloc(*t_us,    sizeof(double) * (size_t)new_cap);
+  if (!m2 || !t2) {
+    if (m2 && m2 != *margins) free(m2);
+    if (t2 && t2 != *t_us)    free(t2);
+    return 0;  // falhou
+  }
+  *margins  = m2;
+  *t_us     = t2;
+  *capacity = new_cap;
+  return 1;    // ok
 }
 
 //==============================================================================
@@ -236,10 +242,7 @@ static void MlpInferOne(const float* x_raw, float* z2_out) {
 static int RunSingle(const char* path) {
   // Lê test_vector.json e escreve results_batch.json equivalente (forwards=1).
   char* buf = SlurpFile(path, NULL);
-  if (!buf) {
-    perror("SlurpFile");
-    return 1;
-  }
+  if (!buf) { perror("SlurpFile"); return 1; }
 
   float x_raw[MLP_N_IN], z2[MLP_N_OUT];
   int pred_json = -1, label = -1;
@@ -270,11 +273,7 @@ static int RunSingle(const char* path) {
       (pred_json >= 0 && pred_json == pred_c) ? 100.0 : 0.0;
 
   FILE* fr = fopen("export/results_batch.json", "wb");
-  if (!fr) {
-    perror("open results");
-    free(buf);
-    return 1;
-  }
+  if (!fr) { perror("open results"); free(buf); return 1; }
   fprintf(fr,
           "{\n"
           "  \"forwards\": 1,\n"
@@ -284,45 +283,37 @@ static int RunSingle(const char* path) {
           "  \"parity_py_pct\": %.6f,\n"
           "  \"margin_p10\": %.6f,\n"
           "  \"margin_p50\": %.6f,\n"
+          "  \"resources_runtime\": {\n"
+          "    \"dtype\": \"float32\",\n"
+          "    \"bytes_weights\": %lld,\n"
+          "    \"bram36k_blocks_est\": %lld,\n"
+          "    \"bytes_workspace\": %lld\n"
+          "  },\n"
           "  \"timestamp\": %ld\n"
           "}\n",
           elapsed_us_total, macs_per_inf, ns_per_mac, parity_py,
-          (double)margin, (double)margin, (long)time(NULL));
+          (double)margin, (double)margin,
+          BytesWeightsModel(),
+          (long long)((BytesWeightsModel() + 4608 - 1) / 4608),
+          BytesWorkspace(),
+          (long)time(NULL));
   fclose(fr);
 
   printf(
       "Totals: forwards=1  elapsed=%.3f ms  MACs/inf=%lld  ns/MAC=%.3f  "
-      "parity_py=%.2f%%\n",
-      elapsed_us_total / 1000.0, macs_per_inf, ns_per_mac, parity_py);
+      "parity_py=%.2f%%  mem(weights)=%.1f KiB  workspace=%.1f KiB\n",
+      elapsed_us_total / 1000.0, macs_per_inf, ns_per_mac, parity_py,
+      (double)BytesWeightsModel() / 1024.0,
+      (double)BytesWorkspace() / 1024.0);
 
   free(buf);
   return 0;
 }
 
-// Helper  para crescer os buffers sem risco de use-after-free.
-static int EnsureCapacity(float **margins, double **t_us, int *capacity) {
-  int new_cap = (*capacity) * 2;
-  float  *m2 = (float *)realloc(*margins, sizeof(float)  * (size_t)new_cap);
-  double *t2 = (double*)realloc(*t_us,    sizeof(double) * (size_t)new_cap);
-  if (!m2 || !t2) {
-    // Se uma das realocações deu certo, libera o bloco temporário para não vazar.
-    if (m2 && m2 != *margins) free(m2);
-    if (t2 && t2 != *t_us)    free(t2);
-    return 0;  // falhou
-  }
-  *margins  = m2;
-  *t_us     = t2;
-  *capacity = new_cap;
-  return 1;    // ok
-}
-
 static int RunBatch(const char* path) {
   // Lê export/test_batch.json (array de objetos) e agrega métricas.
   char* buf = SlurpFile(path, NULL);
-  if (!buf) {
-    perror("SlurpFile");
-    return 1;
-  }
+  if (!buf) { perror("SlurpFile"); return 1; }
 
   int idx = 0;
   int capacity = 256;
@@ -330,9 +321,7 @@ static int RunBatch(const char* path) {
   float* margins = (float*)malloc(sizeof(float) * (size_t)capacity);
   double* t_us   = (double*)malloc(sizeof(double) * (size_t)capacity);
   if (!margins || !t_us) {
-    free(buf);
-    free(margins);
-    free(t_us);
+    free(buf); free(margins); free(t_us);
     fprintf(stderr, "Falha de alocação (margins/t_us).\n");
     return 1;
   }
@@ -340,9 +329,7 @@ static int RunBatch(const char* path) {
   unsigned* cm = (unsigned*)calloc(
       (size_t)MLP_N_OUT * (size_t)MLP_N_OUT, sizeof(unsigned));
   if (!cm) {
-    free(buf);
-    free(margins);
-    free(t_us);
+    free(buf); free(margins); free(t_us);
     fprintf(stderr, "Falha de alocação (confusion matrix).\n");
     return 1;
   }
@@ -362,14 +349,12 @@ static int RunBatch(const char* path) {
     if (*p == '{' && depth == 1) {
       char* start = p;
       int d = 0;
-      // Avança até o '}' correspondente deste objeto.
       do {
         if (*p == '{') ++d;
         else if (*p == '}') --d;
         ++p;
       } while (*p && d > 0);
 
-      // Garante capacidade.
       if (idx >= capacity) {
         if (!EnsureCapacity(&margins, &t_us, &capacity)) {
           free(buf); free(margins); free(t_us); free(cm);
@@ -378,7 +363,6 @@ static int RunBatch(const char* path) {
         }
       }
 
-      // Parse e inferência.
       float x_raw[MLP_N_IN], z2[MLP_N_OUT];
       int pred_json = -1, label = -1;
       if (ParseItemFields(start, x_raw, MLP_N_IN, &pred_json, &label) != 0) {
@@ -421,7 +405,8 @@ static int RunBatch(const char* path) {
 
   const double ns_per_mac =
       (idx > 0 && macs_per_inf > 0)
-          ? (elapsed_us_total * 1000.0) / ((double)macs_per_inf * (double)idx)
+          ? (elapsed_us_total * 1000.0) /
+                ((double)macs_per_inf * (double)idx)
           : 0.0;
 
   // Percentis de margem e paridade.
@@ -442,6 +427,11 @@ static int RunBatch(const char* path) {
     parity_py = 100.0 * (double)hits_py / (double)idx;
   }
 
+  // Recursos de runtime (para relatório).
+  const long long bytes_weights = BytesWeightsModel();
+  const long long bytes_workspace = BytesWorkspace();
+  const long long bram_blocks_est = (bytes_weights + 4608 - 1) / 4608;
+
   // Grava results_batch.json.
   FILE* fr = fopen("export/results_batch.json", "wb");
   if (!fr) {
@@ -457,12 +447,17 @@ static int RunBatch(const char* path) {
   fprintf(fr, "  \"ns_per_mac\": %.6f,\n", ns_per_mac);
   fprintf(fr, "  \"parity_py_pct\": %.6f,\n", parity_py);
   fprintf(fr, "  \"margin_p10\": %.6f,\n", margin_p10);
-  fprintf(fr, "  \"margin_p50\": %.6f", margin_p50);
-
+  fprintf(fr, "  \"margin_p50\": %.6f,\n", margin_p50);
+  fprintf(fr, "  \"resources_runtime\": {\n");
+  fprintf(fr, "    \"dtype\": \"float32\",\n");
+  fprintf(fr, "    \"bytes_weights\": %lld,\n", bytes_weights);
+  fprintf(fr, "    \"bram36k_blocks_est\": %lld,\n", bram_blocks_est);
+  fprintf(fr, "    \"bytes_workspace\": %lld\n", bytes_workspace);
+  fprintf(fr, "  },\n");
   if (idx > 0 && correct_lab > 0) {
-    const double acc_lab   = 100.0 * (double)correct_lab / (double)idx;
+    const double acc_lab = 100.0 * (double)correct_lab / (double)idx;
     const double loss_mean = loss_sum / (double)idx;
-    fprintf(fr, ",\n  \"acc_label_pct\": %.6f,\n", acc_lab);
+    fprintf(fr, "  \"acc_label_pct\": %.6f,\n", acc_lab);
     fprintf(fr, "  \"loss_mean\": %.6f,\n", loss_mean);
     fprintf(fr, "  \"confusion_matrix\": [\n");
     for (int r = 0; r < MLP_N_OUT; ++r) {
@@ -473,22 +468,24 @@ static int RunBatch(const char* path) {
       }
       fprintf(fr, "]%s\n", (r + 1 < MLP_N_OUT) ? "," : "");
     }
-    fprintf(fr, "  ]");
+    fprintf(fr, "  ],\n");
   }
-
-  fprintf(fr, ",\n  \"timestamp\": %ld\n", (long)time(NULL));
+  fprintf(fr, "  \"timestamp\": %ld\n", (long)time(NULL));
   fprintf(fr, "}\n");
   fclose(fr);
 
-  // Log humano.
-  printf("Totals: forwards=%d  elapsed=%.3f ms  MACs/inf=%lld  ns/MAC=%.3f  parity_py=%.2f%%",
-         idx, elapsed_us_total / 1000.0, macs_per_inf, ns_per_mac, parity_py);
-  if (idx > 0 && correct_lab > 0) {
-    const double acc_lab   = 100.0 * (double)correct_lab / (double)idx;
-    const double loss_mean = loss_sum / (double)idx;
-    printf("  acc=%.2f%%  loss=%.4f", acc_lab, loss_mean);
-  }
-  printf("\n");
+  printf(
+      "Totals: forwards=%d  elapsed=%.3f ms  MACs/inf=%lld  ns/MAC=%.3f  "
+      "parity_py=%.2f%%  acc%s  loss%s  mem(weights)=%.1f KiB  workspace=%.1f KiB\n",
+      idx, elapsed_us_total / 1000.0, macs_per_inf, ns_per_mac, parity_py,
+      (idx > 0 && correct_lab > 0)
+          ? (printf("=%0.2f%%", 100.0 * (double)correct_lab / (double)idx), "")
+          : ("=n/a", ""),
+      (idx > 0 && correct_lab > 0)
+          ? (printf("=%0.4f", (loss_sum / (double)idx)), "")
+          : ("=n/a", ""),
+      (double)bytes_weights / 1024.0,
+      (double)bytes_workspace / 1024.0);
 
   free(buf);
   free(margins);
@@ -496,6 +493,10 @@ static int RunBatch(const char* path) {
   free(cm);
   return 0;
 }
+
+//------------------------------------------------------------------------------
+// Descoberta de entrada padrão e main
+//------------------------------------------------------------------------------
 
 static const char* ResolveDefaultJson(void) {
   static const char* kCands[] = {
@@ -505,21 +506,13 @@ static const char* ResolveDefaultJson(void) {
   };
   for (int i = 0; kCands[i]; ++i) {
     FILE* f = fopen(kCands[i], "rb");
-    if (f) {
-      fclose(f);
-      return kCands[i];
-    }
+    if (f) { fclose(f); return kCands[i]; }
   }
   return NULL;
 }
 
 int main(int argc, char** argv) {
-  const char* path = NULL;
-  if (argc > 1) {
-    path = argv[1];
-  } else {
-    path = ResolveDefaultJson();
-  }
+  const char* path = (argc > 1) ? argv[1] : ResolveDefaultJson();
   if (!path) {
     fprintf(stderr,
             "Não foi possível localizar export/test_batch.json "
@@ -528,10 +521,7 @@ int main(int argc, char** argv) {
   }
 
   FILE* fp = fopen(path, "rb");
-  if (!fp) {
-    perror("fopen");
-    return 1;
-  }
+  if (!fp) { perror("fopen"); return 1; }
   const int c = FirstNonWs(fp);
   fclose(fp);
 
