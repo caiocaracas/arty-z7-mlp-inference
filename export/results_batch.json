@@ -1,24 +1,30 @@
 {
   "forwards": 1024,
-  "elapsed_us_total": 620.000000,
-  "macs_per_inf": 640,
-  "ns_per_mac": 0.946045,
+  "elapsed_us_total": 25168.000000,
+  "macs_per_inf": 50816,
+  "ns_per_mac": 0.483669,
   "parity_py_pct": 100.000000,
-  "margin_p10": 1.638802,
-  "margin_p50": 5.636977,
+  "margin_p10": 7.443937,
+  "margin_p50": 18.752297,
   "resources_runtime": {
     "dtype": "float32",
-    "bytes_weights": 2704,
-    "bram36k_blocks_est": 1,
-    "bytes_workspace": 208
+    "bytes_weights": 203560,
+    "bram36k_blocks_est": 45,
+    "bytes_workspace": 3432
   },
-  "acc_label_pct": 94.824219,
-  "loss_mean": 0.192484,
+  "acc_label_pct": 96.386719,
+  "loss_mean": 0.333165,
   "confusion_matrix": [
-    [241, 12, 2, 5],
-    [6, 250, 2, 6],
-    [5, 7, 236, 3],
-    [2, 2, 1, 244]
+    [103, 0, 0, 0, 0, 1, 0, 0, 0, 0],
+    [0, 97, 1, 1, 0, 0, 1, 0, 2, 0],
+    [1, 0, 83, 0, 0, 0, 0, 1, 1, 0],
+    [1, 0, 1, 105, 0, 1, 0, 2, 0, 1],
+    [0, 0, 0, 0, 118, 0, 0, 0, 1, 1],
+    [0, 0, 0, 0, 0, 92, 0, 1, 0, 0],
+    [0, 0, 1, 0, 0, 1, 84, 0, 0, 0],
+    [0, 0, 2, 0, 0, 0, 0, 110, 1, 2],
+    [1, 0, 0, 1, 2, 2, 1, 0, 93, 0],
+    [0, 0, 0, 1, 3, 0, 0, 1, 0, 102]
   ],
-  "timestamp": 1758608583
+  "timestamp": 1758657482
 }
