@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <sys/time.h>
+#include <stdint.h>
 #include "../include/weights.h"  
 
 static inline float relu(float x) { return x > 0.f ? x : 0.f; }
@@ -36,14 +38,14 @@ static void mlp_forward_logits(const float *x_raw, float *z2_out) {
   matmul_vec(h, MLP_W2, MLP_N_HID, MLP_N_OUT, z2_out);
   for (int k = 0; k < MLP_N_OUT; ++k) z2_out[k] += MLP_B2[k];
 }
-// JSON helpers mínimos (sem dependências externas) 
+
+// helpers de JSON/arquivo
+
 static int first_non_ws(FILE *fp) {
-  int c;
-  do { c = fgetc(fp); } while (c != EOF && isspace(c));
+  int c; do { c = fgetc(fp); } while (c != EOF && isspace(c));
   return c;
 }
 
-// Carrega arquivo inteiro na memória (PoC)
 static char* slurp_file(const char *path, long *out_sz) {
   FILE *fp = fopen(path, "rb");
   if (!fp) return NULL;
@@ -53,13 +55,32 @@ static char* slurp_file(const char *path, long *out_sz) {
   char *buf = (char*)malloc((size_t)sz + 1);
   if (!buf) { fclose(fp); return NULL; }
   if (fread(buf, 1, (size_t)sz, fp) != (size_t)sz) { free(buf); fclose(fp); return NULL; }
-  buf[sz] = '\0';
-  fclose(fp);
+  buf[sz] = '\0'; fclose(fp);
   if (out_sz) *out_sz = sz;
   return buf;
 }
 
-// JSON com um único vetor {"x_raw":[...], "pred_argmax_logits":K} ---
+// timing & estatísticas
+
+static inline uint64_t now_ns(void) {
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  return (uint64_t)tv.tv_sec * 1000000000ull + (uint64_t)tv.tv_usec * 1000ull;
+}
+
+static int cmp_double(const void *a, const void *b) {
+  double da = *(const double*)a, db = *(const double*)b;
+  return (da > db) - (da < db);
+}
+
+static double percentile_sorted(const double *v, int n, double p) {
+  if (n <= 0) return 0.0;
+  double idx = (p/100.0) * (n - 1);
+  int i = (int)idx;
+  return v[i];
+}
+
+// SINGLE: {"x_raw":[...], "pred_argmax_logits":K} 
 
 static int load_x_raw_from_json_single(const char *path, float *x, int n, int *pred_json_opt) {
   long sz=0; char *buf = slurp_file(path, &sz);
@@ -88,6 +109,7 @@ static int load_x_raw_from_json_single(const char *path, float *x, int n, int *p
       *pred_json_opt = -1;
     }
   }
+
   free(buf);
   return 0;
 }
@@ -111,7 +133,7 @@ static int run_single(const char *path) {
   return (pred_json >= 0 && pred_c != pred_json) ? 2 : 0;
 }
 
-// JSON com lote: [{"x_raw":[...], "pred":K, "margin":M}, ...] ---
+// BATCH: [{"x_raw":[...], "pred":K, "margin":M}, ...]
 
 static int run_batch(const char *path) {
   long sz=0; char *buf = slurp_file(path, &sz);
@@ -122,46 +144,81 @@ static int run_batch(const char *path) {
   int n = 0, hits = 0;
   float x_raw[MLP_N_IN], z2[MLP_N_OUT];
 
-  while ((p = strstr(p, key)) != NULL) {
-    const char *arr = strchr(p, '[');
-    if (!arr) break;
-    ++arr;
+  // 1º passe: contar amostras
+  const char *scan = buf;
+  while ((scan = strstr(scan, key)) != NULL) { ++n; scan += 6; }
+  if (n == 0) { free(buf); fprintf(stderr,"Nenhuma amostra em %s\n", path); return 5; }
+
+  // array de tempos (µs por amostra)
+  double *t_us = (double*)malloc(sizeof(double)*n);
+  if (!t_us) { free(buf); return 6; }
+
+  // warm-up (até 3 amostras)
+  p = buf;
+  for (int w = 0; w < 3 && strstr(p, key); ++w) {
+    const char *arr = strstr(p, key); arr = strchr(arr, '['); if (!arr) break; ++arr;
+    for (int i = 0; i < MLP_N_IN; ++i) {
+      char *endp = NULL;
+      x_raw[i] = strtof(arr, &endp);
+      if (endp == arr) { free(t_us); free(buf); return 2; }
+      arr = endp;
+      while (*arr && *arr != ']' && *arr != '-' && *arr != '+' && *arr != '.' && (*arr < '0' || *arr > '9')) ++arr;
+    }
+    mlp_forward_logits(x_raw, z2);
+    p = arr;
+  }
+
+  // loop medido
+  p = buf;
+  int idx = 0;
+  while ((p = strstr(p, key)) != NULL && idx < n) {
+    const char *arr = strchr(p, '['); if (!arr) break; ++arr;
 
     for (int i = 0; i < MLP_N_IN; ++i) {
       char *endp = NULL;
       x_raw[i] = strtof(arr, &endp);
-      if (endp == arr) { free(buf); return 2; }
+      if (endp == arr) { free(t_us); free(buf); return 2; }
       arr = endp;
       while (*arr && *arr != ']' && *arr != '-' && *arr != '+' && *arr != '.' && (*arr < '0' || *arr > '9')) ++arr;
     }
 
     const char *q = strstr(arr, "\"pred\"");
-    if (!q) { free(buf); return 3; }
-    q = strchr(q, ':'); if (!q) { free(buf); return 4; }
+    if (!q) { free(t_us); free(buf); return 3; }
+    q = strchr(q, ':'); if (!q) { free(t_us); free(buf); return 4; }
     int pred_json = (int)strtol(q+1, NULL, 10);
 
+    uint64_t t0 = now_ns();
     mlp_forward_logits(x_raw, z2);
+    uint64_t t1 = now_ns();
+
     int pred_c = argmax(z2, MLP_N_OUT);
     if (pred_c == pred_json) ++hits;
-    ++n;
 
-    p = arr; // avança para procurar o próximo item
+    t_us[idx++] = (double)(t1 - t0) / 1000.0; // micros/inf
+    p = arr; // avança
   }
+
+  // estatística de tempo
+  double sum = 0.0;
+  for (int i = 0; i < idx; ++i) sum += t_us[i];
+  double mean_us = (idx > 0) ? (sum / idx) : 0.0;
+
+  qsort(t_us, idx, sizeof(double), cmp_double);
+  double p95_us = percentile_sorted(t_us, idx, 95.0);
+
+  double parity = 100.0 * (double)hits / (double)idx;
+  printf("Batch: N=%d  acertos=%d  PARIDADE_LOTE=%.2f%%  mean=%.2f us/inf  p95=%.2f us/inf\n",
+         idx, hits, parity, mean_us, p95_us);
+
+  free(t_us);
   free(buf);
-
-  if (n == 0) {
-    fprintf(stderr, "Nenhuma amostra encontrada em %s\n", path);
-    return 5;
-  }
-  double parity = 100.0 * (double)hits / (double)n;
-  printf("Batch: N=%d  acertos=%d  PARIDADE_LOTE=%.2f%%\n", n, hits, parity);
-  return (hits == n) ? 0 : 2;
+  return (hits == idx) ? 0 : 2;
 }
 
 // entrada/saída 
 
 static const char* resolve_default_json(void) {
-  // tenta test_batch.json primeiro; se não achar, tenta test_vector.json
+  // tenta primeiro batch; se não houver, cai para single
   static const char *cands[] = {
     // batch
     "export/test_batch.json",
@@ -183,12 +240,7 @@ static const char* resolve_default_json(void) {
 }
 
 int main(int argc, char **argv) {
-  const char *json_path = NULL;
-  if (argc > 1) {
-    json_path = argv[1];
-  } else {
-    json_path = resolve_default_json();
-  }
+  const char *json_path = (argc > 1) ? argv[1] : resolve_default_json();
   if (!json_path) {
     fprintf(stderr, "Não achei test_batch.json nem test_vector.json.\n");
     return 1;
@@ -196,20 +248,10 @@ int main(int argc, char **argv) {
 
   FILE *fp = fopen(json_path, "rb");
   if (!fp) { perror("fopen"); fprintf(stderr, "Falha abrindo %s\n", json_path); return 1; }
-
   int c = first_non_ws(fp);
   fclose(fp);
 
-  int rc;
-  if (c == '[') {
-    // lote
-    rc = run_batch(json_path);
-  } else if (c == '{') {
-    // único
-    rc = run_single(json_path);
-  } else {
-    fprintf(stderr, "JSON inválido em %s (primeiro char não é '[' nem '{')\n", json_path);
-    rc = 1;
-  }
-  return rc;
+  if (c == '[')      return run_batch(json_path);
+  else if (c == '{') return run_single(json_path);
+  else { fprintf(stderr, "JSON inválido em %s\n", json_path); return 1; }
 }
