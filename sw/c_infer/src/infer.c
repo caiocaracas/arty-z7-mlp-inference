@@ -5,9 +5,9 @@
 #include <sys/time.h>
 #include <stdint.h>
 #include <time.h>
-#include "../include/weights.h"  
-// utilitários numéricos
+#include "../include/weights.h"
 
+// utilitários numéricos
 static inline float relu(float x) { return x > 0.f ? x : 0.f; }
 
 static void normalize_inplace(float *x, int d) {
@@ -287,11 +287,19 @@ static const char* resolve_default_json(void) {
     "../export/test_batch.json",
     "../../export/test_batch.json",
     "../../../export/test_batch.json",
+    "ml/src/export/test_batch.json",
+    "../ml/src/export/test_batch.json",
+    "../../ml/src/export/test_batch.json",
+    "../../../ml/src/export/test_batch.json",
     // single
     "export/test_vector.json",
     "../export/test_vector.json",
     "../../export/test_vector.json",
     "../../../export/test_vector.json",
+    "ml/src/export/test_vector.json",
+    "../ml/src/export/test_vector.json",
+    "../../ml/src/export/test_vector.json",
+    "../../../ml/src/export/test_vector.json",
     NULL
   };
   for (int i = 0; cands[i]; ++i) {
