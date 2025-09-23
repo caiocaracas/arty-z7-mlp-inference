@@ -1,10 +1,18 @@
 {
-  "forwards": 0,
-  "elapsed_us_total": 0.000000,
+  "forwards": 1024,
+  "elapsed_us_total": 641.000000,
   "macs_per_inf": 640,
-  "ns_per_mac": 0.000000,
-  "parity_py_pct": 0.000000,
-  "margin_p10": 0.000000,
-  "margin_p50": 0.000000,
-  "timestamp": 1758605835
+  "ns_per_mac": 0.978088,
+  "parity_py_pct": 100.000000,
+  "margin_p10": 1.638802,
+  "margin_p50": 5.636977,
+  "acc_label_pct": 94.824219,
+  "loss_mean": 0.192484,
+  "confusion_matrix": [
+    [241, 12, 2, 5],
+    [6, 250, 2, 6],
+    [5, 7, 236, 3],
+    [2, 2, 1, 244]
+  ],
+  "timestamp": 1758606620
 }

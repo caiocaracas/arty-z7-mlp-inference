@@ -299,20 +299,25 @@ static int RunSingle(const char* path) {
   return 0;
 }
 
-static int RunBatch(const char* path) {
-  // Lê test_batch.json (array de objetos) e agrega métricas.
-  FILE* fp = fopen(path, "rb");
-  if (!fp) {
-    perror("fopen");
-    return 1;
+// Helper  para crescer os buffers sem risco de use-after-free.
+static int EnsureCapacity(float **margins, double **t_us, int *capacity) {
+  int new_cap = (*capacity) * 2;
+  float  *m2 = (float *)realloc(*margins, sizeof(float)  * (size_t)new_cap);
+  double *t2 = (double*)realloc(*t_us,    sizeof(double) * (size_t)new_cap);
+  if (!m2 || !t2) {
+    // Se uma das realocações deu certo, libera o bloco temporário para não vazar.
+    if (m2 && m2 != *margins) free(m2);
+    if (t2 && t2 != *t_us)    free(t2);
+    return 0;  // falhou
   }
-  const int c0 = FirstNonWs(fp);
-  fclose(fp);
-  if (c0 != '[') {
-    fprintf(stderr, "JSON não é um array: %s\n", path);
-    return 1;
-  }
+  *margins  = m2;
+  *t_us     = t2;
+  *capacity = new_cap;
+  return 1;    // ok
+}
 
+static int RunBatch(const char* path) {
+  // Lê export/test_batch.json (array de objetos) e agrega métricas.
   char* buf = SlurpFile(path, NULL);
   if (!buf) {
     perror("SlurpFile");
@@ -323,11 +328,12 @@ static int RunBatch(const char* path) {
   int capacity = 256;
 
   float* margins = (float*)malloc(sizeof(float) * (size_t)capacity);
-  double* t_us = (double*)malloc(sizeof(double) * (size_t)capacity);
+  double* t_us   = (double*)malloc(sizeof(double) * (size_t)capacity);
   if (!margins || !t_us) {
     free(buf);
     free(margins);
     free(t_us);
+    fprintf(stderr, "Falha de alocação (margins/t_us).\n");
     return 1;
   }
 
@@ -337,6 +343,7 @@ static int RunBatch(const char* path) {
     free(buf);
     free(margins);
     free(t_us);
+    fprintf(stderr, "Falha de alocação (confusion matrix).\n");
     return 1;
   }
 
@@ -345,38 +352,37 @@ static int RunBatch(const char* path) {
   double loss_sum = 0.0;
   double elapsed_us_total = 0.0;
 
-  // Varredura por objetos { ... } no nível do array.
+  // Varre objetos no nível 1 (dentro do array raiz).
   int depth = 0;
   char* p = buf;
   while (*p) {
-    if (*p == '{' && depth == 0) {
+    if (*p == '[') { ++depth; ++p; continue; }
+    if (*p == ']') { --depth; ++p; continue; }
+
+    if (*p == '{' && depth == 1) {
       char* start = p;
       int d = 0;
+      // Avança até o '}' correspondente deste objeto.
       do {
         if (*p == '{') ++d;
         else if (*p == '}') --d;
         ++p;
       } while (*p && d > 0);
 
+      // Garante capacidade.
       if (idx >= capacity) {
-        capacity *= 2;
-        margins =
-            (float*)realloc(margins, sizeof(float) * (size_t)capacity);
-        t_us =
-            (double*)realloc(t_us, sizeof(double) * (size_t)capacity);
-        if (!margins || !t_us) {
-          free(buf);
-          free(margins);
-          free(t_us);
-          free(cm);
+        if (!EnsureCapacity(&margins, &t_us, &capacity)) {
+          free(buf); free(margins); free(t_us); free(cm);
+          fprintf(stderr, "Falha de realloc (margins/t_us).\n");
           return 1;
         }
       }
 
+      // Parse e inferência.
       float x_raw[MLP_N_IN], z2[MLP_N_OUT];
       int pred_json = -1, label = -1;
       if (ParseItemFields(start, x_raw, MLP_N_IN, &pred_json, &label) != 0) {
-        fprintf(stderr, "Item %d inválido.\n", idx);
+        fprintf(stderr, "Item %d inválido (x_raw/pred_py/label).\n", idx);
         continue;
       }
 
@@ -402,47 +408,45 @@ static int RunBatch(const char* path) {
       ++idx;
       continue;
     }
-    if (*p == '[') ++depth;
-    else if (*p == ']') --depth;
-    ++p;
+
+    ++p;  // avança quaisquer outros caracteres
   }
 
+  // Agrega tempos.
   for (int i = 0; i < idx; ++i) elapsed_us_total += t_us[i];
 
   const long long macs_per_inf =
       (long long)MLP_N_IN * (long long)MLP_N_HID +
       (long long)MLP_N_HID * (long long)MLP_N_OUT;
+
   const double ns_per_mac =
       (idx > 0 && macs_per_inf > 0)
-          ? (elapsed_us_total * 1000.0) /
-                ((double)macs_per_inf * (double)idx)
+          ? (elapsed_us_total * 1000.0) / ((double)macs_per_inf * (double)idx)
           : 0.0;
 
-  // Percentis das margens.
-  double* m_sorted = (double*)malloc(sizeof(double) * (size_t)idx);
-  if (!m_sorted) {
-    free(buf);
-    free(margins);
-    free(t_us);
-    free(cm);
-    return 1;
+  // Percentis de margem e paridade.
+  double margin_p10 = 0.0, margin_p50 = 0.0, parity_py = 0.0;
+  if (idx > 0) {
+    double* m_sorted = (double*)malloc(sizeof(double) * (size_t)idx);
+    if (!m_sorted) {
+      free(buf); free(margins); free(t_us); free(cm);
+      fprintf(stderr, "Falha de alocação (m_sorted).\n");
+      return 1;
+    }
+    for (int i = 0; i < idx; ++i) m_sorted[i] = (double)margins[i];
+    qsort(m_sorted, (size_t)idx, sizeof(double), CompareDouble);
+    margin_p10 = PercentileSorted(m_sorted, idx, 10.0);
+    margin_p50 = PercentileSorted(m_sorted, idx, 50.0);
+    free(m_sorted);
+
+    parity_py = 100.0 * (double)hits_py / (double)idx;
   }
-  for (int i = 0; i < idx; ++i) m_sorted[i] = (double)margins[i];
-  qsort(m_sorted, (size_t)idx, sizeof(double), CompareDouble);
-  const double margin_p10 = PercentileSorted(m_sorted, idx, 10.0);
-  const double margin_p50 = PercentileSorted(m_sorted, idx, 50.0);
 
-  const double parity_py =
-      (idx > 0) ? (100.0 * (double)hits_py / (double)idx) : 0.0;
-
+  // Grava results_batch.json.
   FILE* fr = fopen("export/results_batch.json", "wb");
   if (!fr) {
     perror("open results");
-    free(buf);
-    free(margins);
-    free(t_us);
-    free(m_sorted);
-    free(cm);
+    free(buf); free(margins); free(t_us); free(cm);
     return 1;
   }
 
@@ -453,12 +457,12 @@ static int RunBatch(const char* path) {
   fprintf(fr, "  \"ns_per_mac\": %.6f,\n", ns_per_mac);
   fprintf(fr, "  \"parity_py_pct\": %.6f,\n", parity_py);
   fprintf(fr, "  \"margin_p10\": %.6f,\n", margin_p10);
-  fprintf(fr, "  \"margin_p50\": %.6f,\n", margin_p50);
+  fprintf(fr, "  \"margin_p50\": %.6f", margin_p50);
 
-  if (correct_lab > 0) {
-    const double acc_lab = 100.0 * (double)correct_lab / (double)idx;
+  if (idx > 0 && correct_lab > 0) {
+    const double acc_lab   = 100.0 * (double)correct_lab / (double)idx;
     const double loss_mean = loss_sum / (double)idx;
-    fprintf(fr, "  \"acc_label_pct\": %.6f,\n", acc_lab);
+    fprintf(fr, ",\n  \"acc_label_pct\": %.6f,\n", acc_lab);
     fprintf(fr, "  \"loss_mean\": %.6f,\n", loss_mean);
     fprintf(fr, "  \"confusion_matrix\": [\n");
     for (int r = 0; r < MLP_N_OUT; ++r) {
@@ -469,18 +473,18 @@ static int RunBatch(const char* path) {
       }
       fprintf(fr, "]%s\n", (r + 1 < MLP_N_OUT) ? "," : "");
     }
-    fprintf(fr, "  ],\n");
+    fprintf(fr, "  ]");
   }
-  fprintf(fr, "  \"timestamp\": %ld\n", (long)time(NULL));
+
+  fprintf(fr, ",\n  \"timestamp\": %ld\n", (long)time(NULL));
   fprintf(fr, "}\n");
   fclose(fr);
 
-  printf(
-      "Totals: forwards=%d  elapsed=%.3f ms  MACs/inf=%lld  ns/MAC=%.3f  "
-      "parity_py=%.2f%%",
-      idx, elapsed_us_total / 1000.0, macs_per_inf, ns_per_mac, parity_py);
-  if (correct_lab > 0) {
-    const double acc_lab = 100.0 * (double)correct_lab / (double)idx;
+  // Log humano.
+  printf("Totals: forwards=%d  elapsed=%.3f ms  MACs/inf=%lld  ns/MAC=%.3f  parity_py=%.2f%%",
+         idx, elapsed_us_total / 1000.0, macs_per_inf, ns_per_mac, parity_py);
+  if (idx > 0 && correct_lab > 0) {
+    const double acc_lab   = 100.0 * (double)correct_lab / (double)idx;
     const double loss_mean = loss_sum / (double)idx;
     printf("  acc=%.2f%%  loss=%.4f", acc_lab, loss_mean);
   }
@@ -489,7 +493,6 @@ static int RunBatch(const char* path) {
   free(buf);
   free(margins);
   free(t_us);
-  free(m_sorted);
   free(cm);
   return 0;
 }
@@ -498,15 +501,14 @@ static const char* ResolveDefaultJson(void) {
   static const char* kCands[] = {
       "export/test_batch.json",
       "export/test_vector.json",
-      "../export/test_batch.json",
-      "../export/test_vector.json",
-      "../../export/test_batch.json",
-      "../../export/test_vector.json",
       NULL,
   };
   for (int i = 0; kCands[i]; ++i) {
     FILE* f = fopen(kCands[i], "rb");
-    if (f) { fclose(f); return kCands[i]; }
+    if (f) {
+      fclose(f);
+      return kCands[i];
+    }
   }
   return NULL;
 }
