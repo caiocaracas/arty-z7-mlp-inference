@@ -11,12 +11,15 @@
   "metrics_test": {
     "acc": 0.948
   },
-  "train_elapsed_s": 0.7930335559976811,
+  "train_elapsed_s": 0.7433086470045964,
   "macs_per_inf": 640,
   "resources": {
     "n_params": 676,
+    "dtype_weights": "float32",
     "bytes_per_weight": 4,
     "bytes_weights": 2704,
+    "bytes_weights_kib": 2.641,
+    "bytes_weights_mib": 0.003,
     "bram36k_blocks_est": 1
   },
   "parity_py_pct": 100.0,
@@ -58,7 +61,7 @@
       2.457589864730835
     ]
   },
-  "timestamp": 1758605185,
+  "timestamp": 1758608348,
   "test_log_loss": 0.18414168965763283,
   "confusion_matrix": [
     [
@@ -295,5 +298,14 @@
     0.09327557492731683,
     0.09313527707559939
   ],
+  "runtime_buffers": {
+    "dtype_activations": "float32",
+    "bytes_x": 64,
+    "bytes_hidden": 128,
+    "bytes_out": 16,
+    "workspace_bytes": 208,
+    "workspace_kib": 0.203,
+    "activations_peak_bytes": 128
+  },
   "energy_per_mac_pJ": null
 }

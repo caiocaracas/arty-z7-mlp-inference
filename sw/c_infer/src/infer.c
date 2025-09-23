@@ -474,18 +474,31 @@ static int RunBatch(const char* path) {
   fprintf(fr, "}\n");
   fclose(fr);
 
-  printf(
-      "Totals: forwards=%d  elapsed=%.3f ms  MACs/inf=%lld  ns/MAC=%.3f  "
-      "parity_py=%.2f%%  acc%s  loss%s  mem(weights)=%.1f KiB  workspace=%.1f KiB\n",
-      idx, elapsed_us_total / 1000.0, macs_per_inf, ns_per_mac, parity_py,
-      (idx > 0 && correct_lab > 0)
-          ? (printf("=%0.2f%%", 100.0 * (double)correct_lab / (double)idx), "")
-          : ("=n/a", ""),
-      (idx > 0 && correct_lab > 0)
-          ? (printf("=%0.4f", (loss_sum / (double)idx)), "")
-          : ("=n/a", ""),
-      (double)bytes_weights / 1024.0,
-      (double)bytes_workspace / 1024.0);
+  char acc_buf[48]  = {0};
+char loss_buf[48] = {0};
+if (idx > 0 && correct_lab > 0) {
+  double acc_lab   = 100.0 * (double)correct_lab / (double)idx;
+  double loss_mean = (loss_sum / (double)idx);
+  snprintf(acc_buf,  sizeof(acc_buf),  "  acc=%.2f%%", acc_lab);
+  snprintf(loss_buf, sizeof(loss_buf), "  loss=%.4f", loss_mean);
+} else {
+  // mantém “n/a” explícito se preferir:
+  snprintf(acc_buf,  sizeof(acc_buf),  "  acc=n/a");
+  snprintf(loss_buf, sizeof(loss_buf), "  loss=n/a");
+}
+
+printf(
+    "Totals: forwards=%d  elapsed=%.3f ms  MACs/inf=%lld  ns/MAC=%.3f  "
+    "parity_py=%.2f%%%s%s  mem(weights)=%.1f KiB  workspace=%.1f KiB\n",
+    idx,
+    elapsed_us_total / 1000.0,
+    macs_per_inf,
+    ns_per_mac,
+    parity_py,
+    acc_buf,
+    loss_buf,
+    (double)bytes_weights / 1024.0,
+    (double)bytes_workspace / 1024.0);
 
   free(buf);
   free(margins);
