@@ -1,0 +1,24 @@
+{
+  "forwards": 1024,
+  "elapsed_us_total": 620.000000,
+  "macs_per_inf": 640,
+  "ns_per_mac": 0.946045,
+  "parity_py_pct": 100.000000,
+  "margin_p10": 1.638802,
+  "margin_p50": 5.636977,
+  "resources_runtime": {
+    "dtype": "float32",
+    "bytes_weights": 2704,
+    "bram36k_blocks_est": 1,
+    "bytes_workspace": 208
+  },
+  "acc_label_pct": 94.824219,
+  "loss_mean": 0.192484,
+  "confusion_matrix": [
+    [241, 12, 2, 5],
+    [6, 250, 2, 6],
+    [5, 7, 236, 3],
+    [2, 2, 1, 244]
+  ],
+  "timestamp": 1758608583
+}

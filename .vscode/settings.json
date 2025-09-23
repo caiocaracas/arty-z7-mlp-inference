@@ -1,0 +1,7 @@
+{
+  "files.associations": {
+    "time.h": "c",
+    "weights.h": "c",
+    "string.h": "c"
+  }
+}
