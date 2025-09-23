@@ -7,6 +7,10 @@
 #include <time.h>
 #include "../include/weights.h"
 
+#ifndef INFER_REPEAT
+#define INFER_REPEAT 200
+#endif
+
 // utilitários numéricos
 static inline float relu(float x) { return x > 0.f ? x : 0.f; }
 
@@ -208,14 +212,17 @@ static int run_batch(const char *path) {
     q = strchr(q, ':'); if (!q) { free(margins); free(t_us); free(buf); return 4; }
     int pred_json = (int)strtol(q+1, NULL, 10);
 
+    // mede INFER_REPEAT forward passes e divide depois
     uint64_t t0 = now_ns();
-    mlp_forward_logits(x_raw, z2);
+    for (int rep = 0; rep < INFER_REPEAT; ++rep) {
+      mlp_forward_logits(x_raw, z2);
+    }
     uint64_t t1 = now_ns();
 
     int pred_c = argmax(z2, MLP_N_OUT);
     if (pred_c == pred_json) ++hits;
 
-    t_us[idx] = (double)(t1 - t0) / 1000.0; // micros/inf
+    t_us[idx] = ((double)(t1 - t0) / 1000.0) / (double)INFER_REPEAT; // µs por inferência
 
     // margem: maior - segundo_maior (sem softmax)
     double max1 = z2[0], max2 = -1e30;
