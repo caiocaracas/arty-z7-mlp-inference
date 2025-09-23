@@ -168,16 +168,6 @@ def export_header_and_meta(
 
     `weights.h` contém dimensões, mean/scale e pesos float32 em row-major
     por neurônio de saída.
-
-    Args:
-      cfg: Configuração consolidada.
-      scaler: StandardScaler treinado.
-      w1, b1, w2, b2: Pesos e biases.
-      solver_name: Nome do solver usado no scikit-learn.
-      acc_test: Acurácia no conjunto de teste.
-      elapsed_s: Tempo de treinamento (segundos).
-      parity_py: Paridade top-1 (nosso forward Py vs sklearn), [0,1].
-      extra_metrics: Dicionário com campos extras para `meta.json`.
     """
     cfg.outdir.mkdir(parents=True, exist_ok=True)
 
@@ -254,14 +244,7 @@ def save_test_vector(
     w2: np.ndarray,
     b2: np.ndarray,
 ) -> None:
-    """Grava um único vetor de teste com pred e margem.
-
-    Args:
-      outdir: Diretório de saída.
-      x_raw: Vetor de entrada cru (D,).
-      scaler: StandardScaler treinado.
-      w1, b1, w2, b2: Pesos e bias.
-    """
+    """Grava um único vetor de teste com pred e margem."""
     z2 = logits_from_raw_batch(
         x_raw[None, :], scaler.mean_, scaler.scale_, w1, b1, w2, b2
     )[0]
@@ -292,16 +275,7 @@ def save_test_batch(
     b2: np.ndarray,
     batch_size: int,
 ) -> None:
-    """Grava lote de teste com x_raw, label, pred_py e margem.
-
-    Args:
-      outdir: Diretório de saída.
-      xte_raw: Lote de entradas cruas, shape (N, D).
-      yte: Rótulos, shape (N,).
-      scaler: StandardScaler treinado.
-      w1, b1, w2, b2: Pesos e bias.
-      batch_size: Tamanho máximo do lote gravado.
-    """
+    """Grava lote de teste com x_raw, label, pred_py e margem."""
     n = min(batch_size, xte_raw.shape[0])
     xsel = np.asarray(xte_raw[:n], dtype=np.float32)
     ysel = np.asarray(yte[:n], dtype=np.int32)
@@ -335,11 +309,7 @@ def save_test_batch(
 
 
 def build_config_from_flags() -> Config:
-    """Cria a configuração a partir de flags de linha de comando.
-
-    Returns:
-      Instância de Config com os parâmetros consolidados.
-    """
+    """Cria a configuração a partir de flags de linha de comando."""
     parser = argparse.ArgumentParser(
         description="Treino MLP e export de artefatos/métricas."
     )
@@ -427,8 +397,6 @@ def main() -> None:
         format="%(levelname)s:%(name)s:%(message)s",
     )
     cfg = build_config_from_flags()
-    rng = np.random.default_rng(cfg.random_state)
-    _ = rng  # Mantido para futura reprodutibilidade adicional.
 
     # Dados sintéticos.
     x, y = make_classification(
@@ -498,11 +466,26 @@ def main() -> None:
     n_in, n_hid = w1.shape
     n_out = w2.shape[1]
     macs_per_inf = int(n_in * n_hid + n_hid * n_out)
-    bytes_per_weight = 4
+
+    # Pesos (modelo)
+    bytes_per_weight = 4  # float32
     n_params = int(w1.size + b1.size + w2.size + b2.size)
     bytes_weights = int(n_params * bytes_per_weight)
     bram36k_bytes = 4608
     bram36k_blocks_est = int((bytes_weights + bram36k_bytes - 1) // bram36k_bytes)
+
+    # Buffers de execução (ativação) em float32
+    bytes_x = n_in * 4
+    bytes_hidden = n_hid * 4
+    bytes_out = n_out * 4
+    workspace_bytes = bytes_x + bytes_hidden + bytes_out
+    activations_peak_bytes = max(bytes_x, bytes_hidden, bytes_out)
+
+    def kib(x: int) -> float:
+        return round(x / 1024.0, 3)
+
+    def mib(x: int) -> float:
+        return round(x / (1024.0 ** 2), 3)
 
     extra = {
         "test_log_loss": test_ll,
@@ -510,13 +493,33 @@ def main() -> None:
         "class_balance_test": class_balance_test,
         "train_loss_final": train_loss_final,
         "train_loss_curve": train_loss_curve,
+
+        # custo computacional
+        "macs_per_inf": macs_per_inf,
+
+        # pesos (modelo)
         "resources": {
             "n_params": n_params,
+            "dtype_weights": "float32",
             "bytes_per_weight": bytes_per_weight,
             "bytes_weights": bytes_weights,
+            "bytes_weights_kib": kib(bytes_weights),
+            "bytes_weights_mib": mib(bytes_weights),
             "bram36k_blocks_est": bram36k_blocks_est,
         },
-        "macs_per_inf": macs_per_inf,
+
+        # buffers de execução (PS/PC; referência para dimensionar BRAM/DDR)
+        "runtime_buffers": {
+            "dtype_activations": "float32",
+            "bytes_x": bytes_x,
+            "bytes_hidden": bytes_hidden,
+            "bytes_out": bytes_out,
+            "workspace_bytes": workspace_bytes,
+            "workspace_kib": kib(workspace_bytes),
+            "activations_peak_bytes": activations_peak_bytes,
+        },
+
+        # energia: placeholder para próxima fase
         "energy_per_mac_pJ": None,
     }
 
