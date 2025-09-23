@@ -5,11 +5,7 @@
 #include <sys/time.h>
 #include <stdint.h>
 #include <time.h>
-#include "../include/weights.h"
-
-#ifndef INFER_REPEAT
-#define INFER_REPEAT 200
-#endif
+#include "../include/weights.h"  
 
 // utilitários numéricos
 static inline float relu(float x) { return x > 0.f ? x : 0.f; }
@@ -45,7 +41,7 @@ static void mlp_forward_logits(const float *x_raw, float *z2_out) {
   for (int k = 0; k < MLP_N_OUT; ++k) z2_out[k] += MLP_B2[k];
 }
 
-// helpers de JSON/arquivo
+// helpers de JSON/arquivo 
 
 static int first_non_ws(FILE *fp) {
   int c; do { c = fgetc(fp); } while (c != EOF && isspace(c));
@@ -67,6 +63,9 @@ static char* slurp_file(const char *path, long *out_sz) {
 }
 
 // timing & estatísticas
+#ifndef INFER_REPEAT // número de repetições de forward por amostra para reduzir quantização do relógio
+#define INFER_REPEAT 5000
+#endif
 
 static inline uint64_t now_ns(void) {
   struct timeval tv;
@@ -193,9 +192,10 @@ static int run_batch(const char *path) {
     p = arr;
   }
 
-  // loop medido
+  // loop medido — também acumulamos tempo total do lote
   p = buf;
   int idx = 0;
+  uint64_t t_batch0 = now_ns();
   while ((p = strstr(p, key)) != NULL && idx < n) {
     const char *arr = strchr(p, '['); if (!arr) break; ++arr;
 
@@ -212,7 +212,7 @@ static int run_batch(const char *path) {
     q = strchr(q, ':'); if (!q) { free(margins); free(t_us); free(buf); return 4; }
     int pred_json = (int)strtol(q+1, NULL, 10);
 
-    // mede INFER_REPEAT forward passes e divide depois
+    // mede INFER_REPEAT forward passes e divide depois (tempo por amostra)
     uint64_t t0 = now_ns();
     for (int rep = 0; rep < INFER_REPEAT; ++rep) {
       mlp_forward_logits(x_raw, z2);
@@ -236,12 +236,10 @@ static int run_batch(const char *path) {
     ++idx;
     p = arr; // avança
   }
+  uint64_t t_batch1 = now_ns();
+  double mean_us_total = ((double)(t_batch1 - t_batch0) / 1000.0) / ((double)idx * (double)INFER_REPEAT);
 
-  // estatística de tempo
-  double sum = 0.0;
-  for (int i = 0; i < idx; ++i) sum += t_us[i];
-  double mean_us = (idx > 0) ? (sum / idx) : 0.0;
-
+  // estatística de tempo por amostra (apenas para p95)
   qsort(t_us, idx, sizeof(double), cmp_double);
   double p95_us = percentile_sorted(t_us, idx, 95.0);
 
@@ -253,7 +251,7 @@ static int run_batch(const char *path) {
   double parity = 100.0 * (double)hits / (double)idx;
   printf("Batch: N=%d  acertos=%d  PARIDADE_LOTE=%.2f%%  mean=%.2f us/inf  p95=%.2f us/inf  "
          "margin_p10=%.6f  margin_p50=%.6f\n",
-         idx, hits, parity, mean_us, p95_us, margin_p10, margin_p50);
+         idx, hits, parity, mean_us_total, p95_us, margin_p10, margin_p50);
 
   // grava results_batch.json no mesmo diretório do JSON de entrada
   char outp[1024];
@@ -269,9 +267,10 @@ static int run_batch(const char *path) {
       "  \"infer_p95_us\": %.6f,\n"
       "  \"margin_p10\": %.6f,\n"
       "  \"margin_p50\": %.6f,\n"
+      "  \"repeat\": %d,\n"
       "  \"timestamp\": %ld\n"
       "}\n",
-      idx, parity, mean_us, p95_us, margin_p10, margin_p50, (long)ts);
+      idx, parity, mean_us_total, p95_us, margin_p10, margin_p50, INFER_REPEAT, (long)ts);
     fclose(fr);
     printf("[OK] results_batch.json escrito em: %s\n", outp);
   } else {
@@ -294,7 +293,7 @@ static const char* resolve_default_json(void) {
     "../export/test_batch.json",
     "../../export/test_batch.json",
     "../../../export/test_batch.json",
-    "ml/src/export/test_batch.json",
+     "ml/src/export/test_batch.json",
     "../ml/src/export/test_batch.json",
     "../../ml/src/export/test_batch.json",
     "../../../ml/src/export/test_batch.json",
@@ -303,7 +302,7 @@ static const char* resolve_default_json(void) {
     "../export/test_vector.json",
     "../../export/test_vector.json",
     "../../../export/test_vector.json",
-    "ml/src/export/test_vector.json",
+     "ml/src/export/test_vector.json",
     "../ml/src/export/test_vector.json",
     "../../ml/src/export/test_vector.json",
     "../../../ml/src/export/test_vector.json",
