@@ -78,6 +78,7 @@ def export_header_and_meta(outdir: Path, scaler: StandardScaler,
 
   n_params = int(W1.size + b1.size + W2.size + b2.size)
   meta = {
+    "dataset": str(CFG.dataset),
     "solver": solver_name,
     "acc_test": float(acc_test),
     "elapsed_s": float(elapsed_s),
