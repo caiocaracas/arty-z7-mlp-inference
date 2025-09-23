@@ -134,7 +134,7 @@ def save_test_batch(outdir: Path, Xte_raw: np.ndarray, scaler: StandardScaler,
                     W1: np.ndarray, b1: np.ndarray, W2: np.ndarray, b2: np.ndarray,
                     batch_size: int) -> None:
   """
-  Exporta batch de amostras para validação Py↔C: x_raw, pred (argmax), margin (zmax - z2nd).
+  exporta batch de amostras para validação Py↔C: x_raw, pred (argmax), margin (zmax - z2nd).
   """
   N = min(batch_size, Xte_raw.shape[0])
   Xsel = np.asarray(Xte_raw[:N], dtype=np.float32)
