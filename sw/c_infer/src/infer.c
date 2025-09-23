@@ -4,9 +4,10 @@
 #include <ctype.h>
 #include <sys/time.h>
 #include <stdint.h>
-#include "../include/weights.h" 
+#include <time.h>
+#include "../include/weights.h"  
+// utilitários numéricos
 
-//utilitários numéricos 
 static inline float relu(float x) { return x > 0.f ? x : 0.f; }
 
 static void normalize_inplace(float *x, int d) {
@@ -40,7 +41,7 @@ static void mlp_forward_logits(const float *x_raw, float *z2_out) {
   for (int k = 0; k < MLP_N_OUT; ++k) z2_out[k] += MLP_B2[k];
 }
 
-// helpers de JSON/arquivo 
+// helpers de JSON/arquivo
 
 static int first_non_ws(FILE *fp) {
   int c; do { c = fgetc(fp); } while (c != EOF && isspace(c));
@@ -61,7 +62,7 @@ static char* slurp_file(const char *path, long *out_sz) {
   return buf;
 }
 
-// timing & estatísticas 
+// timing & estatísticas
 
 static inline uint64_t now_ns(void) {
   struct timeval tv;
@@ -79,6 +80,23 @@ static double percentile_sorted(const double *v, int n, double p) {
   double idx = (p/100.0) * (n - 1);
   int i = (int)idx;
   return v[i];
+}
+
+// constroi caminho "<dir_do_json>/results_batch.json" em out_path
+static void make_results_path(const char *json_path, char *out_path, size_t cap) {
+  const char *slash = strrchr(json_path, '/');
+  if (!slash) {
+    snprintf(out_path, cap, "results_batch.json");
+  } else {
+    size_t dirlen = (size_t)(slash - json_path);
+    if (dirlen + 1 + strlen("results_batch.json") + 1 > cap) {
+      snprintf(out_path, cap, "results_batch.json");
+      return;
+    }
+    memcpy(out_path, json_path, dirlen);
+    out_path[dirlen] = '\0';
+    strcat(out_path, "/results_batch.json");
+  }
 }
 
 // SINGLE: {"x_raw":[...], "pred_argmax_logits":K}
@@ -229,6 +247,29 @@ static int run_batch(const char *path) {
   printf("Batch: N=%d  acertos=%d  PARIDADE_LOTE=%.2f%%  mean=%.2f us/inf  p95=%.2f us/inf  "
          "margin_p10=%.6f  margin_p50=%.6f\n",
          idx, hits, parity, mean_us, p95_us, margin_p10, margin_p50);
+
+  // grava results_batch.json no mesmo diretório do JSON de entrada
+  char outp[1024];
+  make_results_path(path, outp, sizeof(outp));
+  FILE *fr = fopen(outp, "wb");
+  if (fr) {
+    time_t ts = time(NULL);
+    fprintf(fr,
+      "{\n"
+      "  \"n\": %d,\n"
+      "  \"parity_batch_pct\": %.6f,\n"
+      "  \"infer_mean_us\": %.6f,\n"
+      "  \"infer_p95_us\": %.6f,\n"
+      "  \"margin_p10\": %.6f,\n"
+      "  \"margin_p50\": %.6f,\n"
+      "  \"timestamp\": %ld\n"
+      "}\n",
+      idx, parity, mean_us, p95_us, margin_p10, margin_p50, (long)ts);
+    fclose(fr);
+    printf("[OK] results_batch.json escrito em: %s\n", outp);
+  } else {
+    perror("fopen results_batch.json");
+  }
 
   free(t_us);
   free(margins);
