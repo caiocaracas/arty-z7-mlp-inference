@@ -73,7 +73,9 @@ def export_header_and_meta(outdir: Path, scaler: StandardScaler,
     write_c_array(f, "MLP_W2", W2)
     write_c_array(f, "MLP_B2", b2)
 
-  n_params = int(W1.size + b1.size + W2.size + b2.size)
+  n_params = int(W1.size + b1.size + W2.size + b2.size) 
+  macs_per_infer = int(n_in * n_hid + n_hid * n_out) # 16*32 + 32*5 = 672 no run atual
+  model_bytes = int(4 * n_params) # float32 = 4 bytes
   meta = {
     "solver": solver_name,
     "acc_test": float(acc_test),
@@ -81,9 +83,12 @@ def export_header_and_meta(outdir: Path, scaler: StandardScaler,
     "parity_sklearn_forward": float(parity),
     "n_in": int(n_in), "n_hid": int(n_hid), "n_out": int(n_out),
     "n_params": n_params,
+    "macs_per_infer": macs_per_infer,
+    "model_bytes": model_bytes,
     "feature_mean": np.asarray(scaler.mean_,  dtype=np.float32).tolist(),
     "feature_scale": np.asarray(scaler.scale_, dtype=np.float32).tolist()
   }
+
   if extra_metrics:
     meta.update(extra_metrics)
   (outdir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
@@ -180,6 +185,10 @@ def main() -> None:
 
   dt = time.perf_counter() - t0
 
+  n_in, n_hid = W1.shape
+  macs_per_infer = int(n_in * n_hid + n_hid * b2.size)
+  model_bytes = int(4 * (W1.size + b1.size + W2.size + b2.size))
+
   export_header_and_meta(CFG.outdir, scaler, W1, b1, W2, b2,
                         solver_name="adam", acc_test=acc,
                         elapsed_s=dt, parity=parity,
@@ -187,7 +196,8 @@ def main() -> None:
   save_test_vector(CFG.outdir, Xte, scaler, W1, b1, W2, b2)
 
   print(f"[OK] Solver=adam  acc_test={acc:.4f}  parity={parity:.4f}  "
-    f"margin_p10={margin_p10:.4f}  margin_p50={margin_p50:.4f}  elapsed={dt:.2f}s")
+        f"margin_p10={margin_p10:.4f}  margin_p50={margin_p50:.4f}  "
+        f"MACs/inf={macs_per_infer}  model_bytes={model_bytes}  elapsed={dt:.2f}s")
 
 if __name__ == "__main__":
   main()
