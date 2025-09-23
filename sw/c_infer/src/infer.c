@@ -4,8 +4,9 @@
 #include <ctype.h>
 #include <sys/time.h>
 #include <stdint.h>
-#include "../include/weights.h"  
+#include "../include/weights.h" 
 
+//utilitários numéricos 
 static inline float relu(float x) { return x > 0.f ? x : 0.f; }
 
 static void normalize_inplace(float *x, int d) {
@@ -39,7 +40,7 @@ static void mlp_forward_logits(const float *x_raw, float *z2_out) {
   for (int k = 0; k < MLP_N_OUT; ++k) z2_out[k] += MLP_B2[k];
 }
 
-// helpers de JSON/arquivo
+// helpers de JSON/arquivo 
 
 static int first_non_ws(FILE *fp) {
   int c; do { c = fgetc(fp); } while (c != EOF && isspace(c));
@@ -60,7 +61,7 @@ static char* slurp_file(const char *path, long *out_sz) {
   return buf;
 }
 
-// timing & estatísticas
+// timing & estatísticas 
 
 static inline uint64_t now_ns(void) {
   struct timeval tv;
@@ -80,7 +81,7 @@ static double percentile_sorted(const double *v, int n, double p) {
   return v[i];
 }
 
-// SINGLE: {"x_raw":[...], "pred_argmax_logits":K} 
+// SINGLE: {"x_raw":[...], "pred_argmax_logits":K}
 
 static int load_x_raw_from_json_single(const char *path, float *x, int n, int *pred_json_opt) {
   long sz=0; char *buf = slurp_file(path, &sz);
@@ -149,9 +150,11 @@ static int run_batch(const char *path) {
   while ((scan = strstr(scan, key)) != NULL) { ++n; scan += 6; }
   if (n == 0) { free(buf); fprintf(stderr,"Nenhuma amostra em %s\n", path); return 5; }
 
-  // array de tempos (µs por amostra)
+  // arrays: tempos (µs por amostra) e margens (zmax - z2nd)
   double *t_us = (double*)malloc(sizeof(double)*n);
+  double *margins = (double*)malloc(sizeof(double)*n);
   if (!t_us) { free(buf); return 6; }
+  if (!margins) { free(t_us); free(buf); return 6; }
 
   // warm-up (até 3 amostras)
   p = buf;
@@ -160,7 +163,7 @@ static int run_batch(const char *path) {
     for (int i = 0; i < MLP_N_IN; ++i) {
       char *endp = NULL;
       x_raw[i] = strtof(arr, &endp);
-      if (endp == arr) { free(t_us); free(buf); return 2; }
+      if (endp == arr) { free(margins); free(t_us); free(buf); return 2; }
       arr = endp;
       while (*arr && *arr != ']' && *arr != '-' && *arr != '+' && *arr != '.' && (*arr < '0' || *arr > '9')) ++arr;
     }
@@ -177,14 +180,14 @@ static int run_batch(const char *path) {
     for (int i = 0; i < MLP_N_IN; ++i) {
       char *endp = NULL;
       x_raw[i] = strtof(arr, &endp);
-      if (endp == arr) { free(t_us); free(buf); return 2; }
+      if (endp == arr) { free(margins); free(t_us); free(buf); return 2; }
       arr = endp;
       while (*arr && *arr != ']' && *arr != '-' && *arr != '+' && *arr != '.' && (*arr < '0' || *arr > '9')) ++arr;
     }
 
     const char *q = strstr(arr, "\"pred\"");
-    if (!q) { free(t_us); free(buf); return 3; }
-    q = strchr(q, ':'); if (!q) { free(t_us); free(buf); return 4; }
+    if (!q) { free(margins); free(t_us); free(buf); return 3; }
+    q = strchr(q, ':'); if (!q) { free(margins); free(t_us); free(buf); return 4; }
     int pred_json = (int)strtol(q+1, NULL, 10);
 
     uint64_t t0 = now_ns();
@@ -194,7 +197,18 @@ static int run_batch(const char *path) {
     int pred_c = argmax(z2, MLP_N_OUT);
     if (pred_c == pred_json) ++hits;
 
-    t_us[idx++] = (double)(t1 - t0) / 1000.0; // micros/inf
+    t_us[idx] = (double)(t1 - t0) / 1000.0; // micros/inf
+
+    // margem: maior - segundo_maior (sem softmax)
+    double max1 = z2[0], max2 = -1e30;
+    for (int k = 1; k < MLP_N_OUT; ++k) {
+      double v = z2[k];
+      if (v > max1) { max2 = max1; max1 = v; }
+      else if (v > max2) { max2 = v; }
+    }
+    margins[idx] = max1 - max2;
+
+    ++idx;
     p = arr; // avança
   }
 
@@ -206,16 +220,23 @@ static int run_batch(const char *path) {
   qsort(t_us, idx, sizeof(double), cmp_double);
   double p95_us = percentile_sorted(t_us, idx, 95.0);
 
+  // estatística de margem
+  qsort(margins, idx, sizeof(double), cmp_double);
+  double margin_p10 = percentile_sorted(margins, idx, 10.0);
+  double margin_p50 = percentile_sorted(margins, idx, 50.0);
+
   double parity = 100.0 * (double)hits / (double)idx;
-  printf("Batch: N=%d  acertos=%d  PARIDADE_LOTE=%.2f%%  mean=%.2f us/inf  p95=%.2f us/inf\n",
-         idx, hits, parity, mean_us, p95_us);
+  printf("Batch: N=%d  acertos=%d  PARIDADE_LOTE=%.2f%%  mean=%.2f us/inf  p95=%.2f us/inf  "
+         "margin_p10=%.6f  margin_p50=%.6f\n",
+         idx, hits, parity, mean_us, p95_us, margin_p10, margin_p50);
 
   free(t_us);
+  free(margins);
   free(buf);
   return (hits == idx) ? 0 : 2;
 }
 
-// entrada/saída 
+// entrada/saída
 
 static const char* resolve_default_json(void) {
   // tenta primeiro batch; se não houver, cai para single
