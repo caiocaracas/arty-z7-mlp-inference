@@ -21,7 +21,7 @@
 #include <time.h>
 #include <ctype.h>
 
-#include "weights.h"  // Gerado por train.py
+#include "../include/weights.h"  // Gerado por train.py
 
 //==============================================================================
 // Utilitários numéricos e de tempo
@@ -498,14 +498,15 @@ static const char* ResolveDefaultJson(void) {
   static const char* kCands[] = {
       "export/test_batch.json",
       "export/test_vector.json",
+      "../export/test_batch.json",
+      "../export/test_vector.json",
+      "../../export/test_batch.json",
+      "../../export/test_vector.json",
       NULL,
   };
   for (int i = 0; kCands[i]; ++i) {
     FILE* f = fopen(kCands[i], "rb");
-    if (f) {
-      fclose(f);
-      return kCands[i];
-    }
+    if (f) { fclose(f); return kCands[i]; }
   }
   return NULL;
 }
