@@ -56,7 +56,7 @@ Consolidar o framework de **exportação Python → inferência C → Arty Z7** 
 ## 7) Análise planejada
 - **MACs/inf**: calcular `784×H + H×10`. Para H=64 → 50,816 MACs.  
 - **ns/MAC**: derivado de `elapsed_us_total / (forwards × MACs/inf)`.  
-- **Recursos**: pesos ×4 bytes (float32), dividido por 36 KiB → BRAM36K estimada.  
+- **Recursos**: pesos ×4 bytes (float32), dividido por 36 KiB → BRAM36K estimada.
 - **Robustez**: avaliar margens p10 e p50 no lote.  
 - **Foco**: validar escalabilidade do framework (contrato de export/import, métricas consistentes e footprint plausível para a Arty Z7).  
 - **Comparação de solver**: análise secundária, apenas para mostrar consistência do framework.  

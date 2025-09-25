@@ -41,7 +41,7 @@ static inline void DenseRelu(const float* w_row_major, const float* b,
   for (int j = 0; j < out; ++j) {
     const float* w = w_row_major + (size_t)j * (size_t)in;
     double acc = (double)b[j];
-    for (int i = 0; i < in; ++i) {
+    for (int i = 0; i < in; ++i) { // Incrementar de 4 em 4. 
       acc += (double)w[i] * (double)x[i];
     }
     y[j] = Relu((float)acc);
@@ -143,8 +143,8 @@ static inline long long BytesWorkspace(void) {
   return bx + bh + bo;
 }
 
-//==============================================================================
-// JSON helpers (parsing leve, suficiente para nosso formato)
+//==================float============================================================
+// JSON helpers (parsing leve, suficiente para o formato)
 //==============================================================================
 
 static int FirstNonWs(FILE* fp) {
